@@ -1,0 +1,16 @@
+{
+  "name": "root-seven-day-checkin-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ROOT 7-day check-in API and admin console",
+  "scripts": {
+    "adapters": "node scripts/adapter-runner.js",
+    "calibrate": "node scripts/release-calibration.js",
+    "dev": "node src/server.js",
+    "samples": "node scripts/sample-calibration.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

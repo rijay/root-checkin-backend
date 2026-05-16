@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ROOT 7日打卡后台</title>
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <img src="/assets/root-logo.png" alt="ROOT" class="logo" />
+          <p class="eyebrow">运营增长后台</p>
+          <h1>7日身体重启计划</h1>
+          <p class="sub">订单匹配、打卡状态、免单审核和用户画像集中管理。</p>
+        </div>
+        <img src="/assets/root-hero.png" alt="" class="hero-art" />
+      </section>
+
+      <section class="metrics" id="metrics"></section>
+
+      <section class="panel summary-panel">
+        <div class="panel-head">
+          <h2>今日 Summary</h2>
+          <button id="run-audit">生成今日 Summary</button>
+        </div>
+        <div id="summary" class="summary-grid"></div>
+      </section>
+
+      <section class="panel readiness-panel">
+        <div class="panel-head">
+          <h2>上线闸口</h2>
+          <span class="hint">正式上线前阻塞项</span>
+        </div>
+        <div id="launch-readiness" class="readiness-body"></div>
+      </section>
+
+      <section class="panel calibration-panel">
+        <div class="panel-head">
+          <h2>Adapter 校准</h2>
+          <span class="hint">真实账号接入前检查</span>
+        </div>
+        <div id="adapter-calibration" class="calibration-body"></div>
+      </section>
+
+      <section class="panel release-panel">
+        <div class="panel-head">
+          <h2>发布记录</h2>
+          <span class="hint">上线决策和回滚凭证</span>
+        </div>
+        <div id="release-record" class="release-body"></div>
+      </section>
+
+      <section class="panel import-panel">
+        <div class="panel-head">
+          <h2>真实样本导入</h2>
+          <select id="sample-source" aria-label="样本来源">
+            <option value="YOUZAN_ORDER">有赞订单</option>
+            <option value="FULFILLMENT">物流状态</option>
+            <option value="WECHAT_LEAD">企业微信线索</option>
+          </select>
+        </div>
+        <div class="sample-grid">
+          <textarea id="sample-input" spellcheck="false" aria-label="样本内容"></textarea>
+          <div class="sample-side">
+            <div class="sample-actions">
+              <button id="preview-samples">预览校验</button>
+              <button id="import-samples" class="ghost">导入样本</button>
+              <button id="insert-sample-template" class="ghost">填入模板</button>
+            </div>
+            <div id="sample-template" class="sample-template"></div>
+            <div id="sample-result" class="sample-result">
+              <div class="meta">粘贴 JSON、CSV 或表格文本后先预览校验，再导入可识别样本。</div>
+            </div>
+          </div>
+        </div>
+        <div class="sample-ledger">
+          <h3>Adapter 准入</h3>
+          <div id="external-adapter-readiness" class="adapter-readiness-list">
+            <div class="meta">暂无准入结果。</div>
+          </div>
+          <h3>真实 Adapter 接入</h3>
+          <div id="external-adapters" class="external-adapter-list">
+            <div class="meta">暂无 Adapter 状态。</div>
+          </div>
+          <h3>取样评审台账</h3>
+          <div id="sample-reviews" class="sample-review-list">
+            <div class="meta">暂无取样记录。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>用户状态</h2>
+            <button id="refresh">刷新</button>
+          </div>
+          <div id="users" class="table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>免单审核</h2>
+          </div>
+          <div id="refunds" class="table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>运营待办</h2>
+            <select id="task-filter" aria-label="待办类型筛选">
+              <option value="">全部类型</option>
+            </select>
+          </div>
+          <div id="tasks" class="table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>已送达待开始</h2>
+          </div>
+          <div id="ready-users" class="table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>优惠券转化</h2>
+          </div>
+          <div id="coupons" class="table"></div>
+        </div>
+      </section>
+
+      <section class="panel detail-panel">
+        <div class="panel-head">
+          <h2>用户详情</h2>
+          <span class="hint">从用户、待办或已送达列表打开</span>
+        </div>
+        <div id="user-detail" class="detail-body">
+          <div class="row"><div class="meta">暂未选择用户。</div></div>
+        </div>
+      </section>
+    </main>
+    <script src="/admin.js"></script>
+  </body>
+</html>
