@@ -9,6 +9,7 @@ const {
   approveRefund,
   claimCoupon,
   completeOperationTask,
+  confirmAdminOrderMatch,
   continueAsDailyUser,
   createFeedbackFollowTask,
   createStore,
@@ -36,11 +37,13 @@ const {
   listOperationTasks,
   markCouponUsed,
   matchOrder,
+  previewAdminOrderMatch,
   previewExternalSamples,
   recordCouponRepurchaseClick,
   resolveManualReview,
   runExternalAdapter,
   runDailyAudit,
+  searchAdminOrderMatching,
   startCheckin,
   syncManualOrder,
   submitCheckin,
@@ -188,6 +191,9 @@ function createApp(options = {}) {
       }
       if (route === "GET /api/v1/admin/ready-to-start") return ok(res, getReadyToStartUsers(data, url.searchParams.get("date") || undefined));
       if (route === "GET /api/v1/admin/tasks") return ok(res, listOperationTasks(data, Object.fromEntries(url.searchParams)));
+      if (route === "GET /api/v1/admin/order-matching/search") return ok(res, searchAdminOrderMatching(data, Object.fromEntries(url.searchParams)));
+      if (route === "POST /api/v1/admin/order-matching/preview") return ok(res, previewAdminOrderMatch(data, body));
+      if (route === "POST /api/v1/admin/order-matching/confirm") return ok(res, withIdempotency(data, req, () => confirmAdminOrderMatch(data, body)));
       if (method === "GET" && url.pathname.startsWith("/api/v1/admin/users/") && url.pathname.endsWith("/detail")) {
         const userId = url.pathname.split("/").at(-2);
         return ok(res, getAdminUserDetail(data, userId));

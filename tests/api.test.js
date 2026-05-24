@@ -86,6 +86,8 @@ test("serves the REST API and admin dashboard data", async (t) => {
   assert.equal(dashboard.data.metrics.users, 1);
   assert.equal(dashboard.data.summary.date, "2026-04-27");
   assert.equal(dashboard.data.launchReadiness.status, "BLOCKED");
+  assert.equal(Array.isArray(dashboard.data.opsUsers), true);
+  assert.equal(dashboard.data.opsUsers[0].currentBlockage, "暂无匹配订单");
 
   const readiness = await request(baseUrl, "/api/v1/admin/launch-readiness?target=production");
   assert.equal(readiness.code, 0);
@@ -122,6 +124,7 @@ test("serves the REST API and admin dashboard data", async (t) => {
   const detail = await request(baseUrl, `/api/v1/admin/users/${login.data.user.userId}/detail`);
   assert.equal(detail.code, 0);
   assert.equal(detail.data.user.userId, login.data.user.userId);
+  assert.equal(detail.data.opsSummary.currentBlockage, "暂无匹配订单");
   assert.deepEqual(detail.data.feedbacks, []);
 
   const follow = await request(baseUrl, `/api/v1/admin/users/${login.data.user.userId}/follow`, {
@@ -144,6 +147,73 @@ test("HTTP login rejects direct phone payload when direct phone login is not ena
 
   assert.equal(login.code, 1007);
   assert.match(login.message, /微信手机号授权/);
+});
+
+test("admin order matching HTTP Interface searches, previews, and confirms", async (t) => {
+  const server = createApp({ env: directPhoneLoginEnv });
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+
+  const login = await request(baseUrl, "/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ phone: "13800000001" }),
+  });
+  await request(baseUrl, "/api/v1/user/profile", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${login.data.token}` },
+    body: JSON.stringify({
+      joinReasons: ["health"],
+      gutHealthStatus: "normal",
+      improvementMethods: ["diet"],
+      stoolType: "type4",
+    }),
+  });
+
+  const search = await request(baseUrl, "/api/v1/admin/order-matching/search?q=YZROOT202604260001");
+  const preview = await request(baseUrl, "/api/v1/admin/order-matching/preview", {
+    method: "POST",
+    body: JSON.stringify({ orderId: "ord_root_001", userId: login.data.user.userId }),
+  });
+  const confirmed = await request(baseUrl, "/api/v1/admin/order-matching/confirm", {
+    method: "POST",
+    body: JSON.stringify({ orderId: "ord_root_001", userId: login.data.user.userId }),
+  });
+
+  assert.equal(search.code, 0);
+  assert.equal(search.data.orders[0].youzanOrderNo, "YZROOT202604260001");
+  assert.equal(preview.code, 0);
+  assert.equal(preview.data.canConfirm, true);
+  assert.equal(confirmed.code, 0);
+  assert.equal(confirmed.data.order.userId, login.data.user.userId);
+  assert.equal(confirmed.data.task.task_type, "DELIVERED_NOT_STARTED");
+});
+
+test("admin bulk order paste previews and imports orders into matching queue", async (t) => {
+  const server = createApp({ env: directPhoneLoginEnv });
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+  const text = [
+    "有赞订单号,收货人,收货手机号,商品名称,实付金额,订单状态,物流状态,收货地址",
+    "YZROOT202605250001,批量用户,13800025001,ROOT 7日试饮装,199,已支付,已发货,上海市批量地址",
+    "YZROOT202605250002,缺手机号用户,,ROOT 7日试饮装,199,已支付,已发货,上海市批量地址2",
+  ].join("\n");
+
+  const preview = await request(baseUrl, "/api/v1/admin/external-samples/preview", {
+    method: "POST",
+    body: JSON.stringify({ sourceType: "YOUZAN_ORDER", text }),
+  });
+  const imported = await request(baseUrl, "/api/v1/admin/external-samples/import", {
+    method: "POST",
+    body: JSON.stringify({ sourceType: "YOUZAN_ORDER", text }),
+  });
+  const dashboard = await request(baseUrl, "/api/v1/admin/dashboard");
+
+  assert.equal(preview.code, 0);
+  assert.equal(preview.data.total, 2);
+  assert.equal(preview.data.importableCount, 1);
+  assert.equal(preview.data.errorCount, 1);
+  assert.equal(imported.data.importedCount, 1);
+  assert.ok(dashboard.data.opsDashboard.pendingOrders.some((order) => order.youzanOrderNo === "YZROOT202605250001"));
 });
 
 test("external platform adapter Interface exposes catalog and manual sample runs", async (t) => {

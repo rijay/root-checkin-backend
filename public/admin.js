@@ -23,6 +23,12 @@ let currentData = null;
 let currentTaskType = "";
 let currentDetailUserId = "";
 let currentSampleTemplates = [];
+let currentTab = "today";
+let selectedOrderId = "";
+let selectedUserId = "";
+let currentMatchPreview = null;
+let currentUserKeyword = "";
+let currentUserFilter = "";
 
 const sampleExamples = {
   YOUZAN_ORDER: [
@@ -79,16 +85,445 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function setHtml(selector, html) {
+  const element = document.querySelector(selector);
+  if (element) element.innerHTML = html;
+}
+
+function firstValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "") || "";
+}
+
+function maskPhone(phone) {
+  const value = String(phone || "");
+  return value.length >= 11 ? `${value.slice(0, 3)}****${value.slice(-4)}` : value;
+}
+
+function parseDateParts(dateText) {
+  const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function formatDateCn(dateText, referenceDate) {
+  const parts = parseDateParts(dateText);
+  if (!parts) return dateText ? String(dateText) : "";
+  const reference = parseDateParts(referenceDate) || { year: new Date().getFullYear() };
+  if (parts.year === reference.year) return `${parts.month}月${parts.day}日`;
+  return `${parts.year}年${parts.month}月${parts.day}日`;
+}
+
+function dashboardReferenceDate() {
+  return currentData && currentData.summary ? currentData.summary.date : undefined;
+}
+
+function setActiveTab(tabId) {
+  currentTab = tabId || "today";
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === currentTab);
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    const active = panel.dataset.panel === currentTab;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+}
+
+function renderEmpty(text) {
+  return `<div class="row empty-row"><div class="meta">${escapeHtml(text)}</div></div>`;
+}
+
 function renderMetrics(metrics) {
-  document.querySelector("#metrics").innerHTML = Object.entries(labels)
+  setHtml("#metrics", Object.entries(labels)
     .map(([key, label]) => `<article class="metric"><strong>${metrics[key] || 0}</strong><span>${label}</span></article>`)
-    .join("");
+    .join(""));
 }
 
 function renderSummary(summary = {}) {
-  document.querySelector("#summary").innerHTML = Object.entries(summaryLabels)
+  setHtml("#summary", Object.entries(summaryLabels)
     .map(([key, label]) => `<article class="summary-item"><strong>${summary[key] || 0}</strong><span>${label}</span></article>`)
-    .join("") + `<div class="summary-date">日期：${escapeHtml(summary.date || "今日")} · 生成待办：${summary.generatedTasks || 0}</div>`;
+    .join("") + `<div class="summary-date">日期：${escapeHtml(summary.date ? formatDateCn(summary.date, summary.date) : "今日")} · 生成待办：${summary.generatedTasks || 0}</div>`);
+}
+
+function renderOpsMetric(metric) {
+  return `<article class="ops-metric">
+    <span>${escapeHtml(metric.label)}</span>
+    <strong>${metric.value || 0}</strong>
+    <em>${escapeHtml(metric.description || "")}</em>
+  </article>`;
+}
+
+function taskUserText(task) {
+  const user = task.user || {};
+  return firstValue(
+    user.nickname && user.phone ? `${user.nickname} · ${user.phone}` : "",
+    user.nickname,
+    user.phone,
+    task.user_id,
+    "未知用户"
+  );
+}
+
+function renderTaskRows(tasks = [], emptyText = "暂无运营待办。", compact = false) {
+  if (!tasks.length) return renderEmpty(emptyText);
+  return tasks
+    .map((task) => {
+      const id = task.taskId || task.task_id;
+      const type = task.taskType || task.task_type;
+      const script = task.suggestedScript || task.suggested_script || "您好，我来确认一下今天的记录情况。";
+      const action = task.suggestedAction || task.suggested_action || "复制跟进话术，人工确认后标记状态";
+      const priority = task.priorityLabel || task.label || task.priorityLevel || task.status || "待处理";
+      return `<div class="row task-row ${compact ? "compact-row" : ""}">
+        <div>
+          <div class="title">${escapeHtml(task.label || type)} · ${escapeHtml(taskUserText(task))}</div>
+          <div class="meta">${escapeHtml(task.reason || "待处理")}</div>
+          ${compact ? "" : `<div class="meta">建议动作：${escapeHtml(action)}</div>`}
+          ${compact ? "" : `<div class="script">话术：${escapeHtml(script)}</div>`}
+        </div>
+        <div class="task-actions">
+          <span class="pill priority-${escapeHtml(String(task.priorityLevel || "").toLowerCase())}">${escapeHtml(priority)}</span>
+          ${task.user ? `<button class="ghost" data-detail-user-id="${escapeHtml(task.user.userId || task.user.user_id)}">详情</button>` : ""}
+          ${id ? `<button class="ghost" data-copy-script="${escapeHtml(script)}">复制话术</button>
+          <button data-task-id="${escapeHtml(id)}" data-status="DONE" data-note="已人工联系">标记已联系</button>
+          <button class="ghost" data-task-id="${escapeHtml(id)}" data-status="SKIPPED" data-note="暂不处理">跳过</button>` : ""}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderOrderRows(orders = [], emptyText = "暂无待匹配订单。", options = {}) {
+  if (!orders.length) return renderEmpty(emptyText);
+  return orders
+    .map((order) => `<div class="row compact-row ${selectedOrderId === order.orderId ? "selected-row" : ""}">
+      <div>
+        <div class="title">${escapeHtml(order.youzanOrderNo || order.youzan_order_no || order.orderId)}</div>
+        <div class="meta">${escapeHtml(order.receiverName || order.receiver_name || "未知收货人")} · ${escapeHtml(order.receiverPhone || maskPhone(order.receiver_phone))}</div>
+        <div class="meta">${escapeHtml(order.deliveryStatus || order.delivery_status || "-")} · ${escapeHtml(order.productName || order.product_name || "")}</div>
+      </div>
+      <div class="task-actions">
+        <span class="pill">${order.userId ? "已绑定" : "待匹配"}</span>
+        ${options.selectable && order.orderId ? `<button data-select-order-id="${escapeHtml(order.orderId)}">选择订单</button>` : ""}
+      </div>
+    </div>`)
+    .join("");
+}
+
+function renderUserCandidateRows(users = [], emptyText = "暂无用户候选。") {
+  if (!users.length) return renderEmpty(emptyText);
+  return users
+    .map((user) => `<div class="row compact-row ${selectedUserId === user.userId ? "selected-row" : ""}">
+      <div>
+        <div class="title">${escapeHtml(user.nickname || "ROOT用户")} · ${escapeHtml(user.phone || "")}</div>
+        <div class="meta">${escapeHtml(user.state || "")} · 已匹配订单 ${user.matchedOrderCount || 0}</div>
+        ${user.currentSession ? `<div class="meta">当前周期：${escapeHtml(user.currentSession.status)} · ${escapeHtml(formatDateCn(user.currentSession.startDate, dashboardReferenceDate()))}</div>` : ""}
+      </div>
+      <div class="task-actions">
+        <button data-select-user-id="${escapeHtml(user.userId)}">选择用户</button>
+        <button class="ghost" data-detail-user-id="${escapeHtml(user.userId)}">详情</button>
+      </div>
+    </div>`)
+    .join("");
+}
+
+function renderRefundPreviewRows(refunds = []) {
+  if (!refunds.length) return renderEmpty("暂无待审核免单。");
+  return refunds
+    .map((item) => `<div class="row compact-row">
+      <div>
+        <div class="title">${escapeHtml(item.youzanOrderNo || item.youzan_order_no || item.refundId || item.refund_id)}</div>
+        <div class="meta">${escapeHtml(item.user ? `${item.user.nickname || "ROOT用户"} · ${item.user.phone || ""}` : "未知用户")} · 金额 ${item.amount || 0}</div>
+      </div>
+      <span class="pill">${escapeHtml(item.status || "PENDING")}</span>
+    </div>`)
+    .join("");
+}
+
+function renderFeedbackRows(feedbacks = [], emptyText = "暂无异常反馈。") {
+  if (!feedbacks.length) return renderEmpty(emptyText);
+  return feedbacks
+    .map((item) => {
+      const severity = item.severity || (item.tone === "danger" ? "高" : item.tone === "warning" ? "中" : "待看");
+      return `<div class="row feedback-row">
+        <div>
+          <div class="title">${escapeHtml(item.title || "身体反馈")} · ${escapeHtml(item.user ? `${item.user.nickname || "ROOT用户"} · ${item.user.phone || ""}` : "未知用户")}</div>
+          <p>${escapeHtml(item.text || "图片/便型反馈")}</p>
+          <div class="meta">${escapeHtml(formatDateCn(item.date, dashboardReferenceDate()))} · ${escapeHtml(item.sourceType || "")}</div>
+        </div>
+        <div class="task-actions">
+          <span class="pill priority-${escapeHtml(String(severity).toLowerCase())}">${escapeHtml(severity)}</span>
+          ${item.user ? `<button class="ghost" data-detail-user-id="${escapeHtml(item.user.userId || item.user.user_id)}">详情</button>` : ""}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderReadyRows(items = [], emptyText = "暂无已送达待开始用户。") {
+  if (!items.length) return renderEmpty(emptyText);
+  return items
+    .map((item) => {
+      const user = item.user || {};
+      const order = item.order || {};
+      return `<div class="row compact-row">
+        <div>
+          <div class="title">${escapeHtml(user.nickname || user.user_id || "ROOT用户")}</div>
+          <div class="meta">${escapeHtml(order.youzanOrderNo || order.youzan_order_no || order.orderId)} · ${escapeHtml(order.deliveryStatus || order.delivery_status || "")}</div>
+        </div>
+        <div class="task-actions">
+          <span class="pill">READY</span>
+          ${user.userId || user.user_id ? `<button class="ghost" data-detail-user-id="${escapeHtml(user.userId || user.user_id)}">详情</button>` : ""}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderOpsDashboard(ops = {}) {
+  setHtml("#ops-metrics", (ops.metrics || []).map(renderOpsMetric).join(""));
+  setHtml("#priority-tasks", renderTaskRows((ops.priorityTasks || []).slice(0, 10), "暂无高优先级待办。"));
+  setHtml("#pending-orders-preview", renderOrderRows((ops.pendingOrders || []).slice(0, 4), "暂无待匹配订单。", { selectable: true }));
+  setHtml("#pending-orders", renderOrderRows(ops.pendingOrders || [], "暂无待匹配订单。", { selectable: true }));
+  setHtml("#refund-preview", renderRefundPreviewRows((ops.refundPreview || []).slice(0, 4)));
+  setHtml("#risk-feedback-preview", renderFeedbackRows((ops.riskFeedbacks || []).slice(0, 4), "暂无异常反馈。"));
+  setHtml("#risk-feedbacks", renderFeedbackRows(ops.riskFeedbacks || [], "暂无异常反馈。"));
+  setHtml("#ready-users-preview", renderReadyRows((ops.readyToStartUsers || []).slice(0, 4)));
+}
+
+function selectedOrder() {
+  const orders = [
+    ...(currentData && currentData.orders ? currentData.orders : []),
+    ...(currentData && currentData.opsDashboard ? currentData.opsDashboard.pendingOrders || [] : []),
+  ];
+  return orders.find((order) => order.orderId === selectedOrderId) || null;
+}
+
+function selectedUser() {
+  const users = currentData && currentData.users ? currentData.users : [];
+  return users.find((user) => user.userId === selectedUserId) || null;
+}
+
+function renderMatchPreview(preview = null) {
+  currentMatchPreview = preview;
+  const order = preview ? preview.order : selectedOrder();
+  const user = preview ? preview.user : selectedUser();
+  if (!order || !user) {
+    setHtml("#match-preview", `<div class="empty-box">已选择：${order ? "订单" : "未选订单"} / ${user ? "用户" : "未选用户"}。选择两侧候选后生成预览。</div>`);
+    return;
+  }
+  const risks = preview.risks || [];
+  const riskHtml = risks.length
+    ? risks.map((item) => `<div class="risk-row risk-${escapeHtml(String(item.level || "").toLowerCase())}">
+        <strong>${escapeHtml(item.type)}</strong>
+        <span>${escapeHtml(item.message)}</span>
+      </div>`).join("")
+    : `<div class="risk-row risk-safe"><strong>无明显风险</strong><span>可直接确认匹配。</span></div>`;
+  const effects = (preview.writeEffects || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  setHtml("#match-preview", `
+    <div class="match-card">
+      <h4>订单</h4>
+      <p>${escapeHtml(order.youzanOrderNo)} · ${escapeHtml(order.receiverName || "未知收货人")} · ${escapeHtml(order.deliveryStatus)}</p>
+    </div>
+    <div class="match-card">
+      <h4>用户</h4>
+      <p>${escapeHtml(user.nickname || "ROOT用户")} · ${escapeHtml(user.phone || "")} · ${escapeHtml(user.state || "")}</p>
+    </div>
+    <div class="match-card">
+      <h4>风险提示</h4>
+      ${riskHtml}
+    </div>
+    <div class="match-card">
+      <h4>写入影响</h4>
+      <ul>${effects}</ul>
+      <p class="meta">${escapeHtml(preview.recommendedAction || "")}</p>
+    </div>
+  `);
+  const riskInput = document.querySelector("#confirm-risks");
+  const rebindInput = document.querySelector("#confirm-rebind");
+  if (riskInput) riskInput.checked = !preview.requiresSecondConfirm;
+  if (rebindInput) rebindInput.checked = false;
+}
+
+async function previewSelectedMatch() {
+  if (!selectedOrderId || !selectedUserId) {
+    renderMatchPreview(null);
+    return;
+  }
+  try {
+    const preview = await api("/api/v1/admin/order-matching/preview", {
+      method: "POST",
+      body: JSON.stringify({ orderId: selectedOrderId, userId: selectedUserId }),
+    });
+    renderMatchPreview(preview);
+  } catch (error) {
+    currentMatchPreview = null;
+    setHtml("#match-preview", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+async function searchOrderMatching() {
+  try {
+    const query = document.querySelector("#order-match-search").value.trim();
+    const result = await api(`/api/v1/admin/order-matching/search?q=${encodeURIComponent(query)}`);
+    setHtml("#pending-orders", renderOrderRows(result.orders || [], "暂无订单候选。", { selectable: true }));
+    setHtml("#user-candidates", renderUserCandidateRows(result.users || [], "暂无用户候选。"));
+    setHtml("#match-result", `<div class="inline-success">已找到订单 ${result.orders.length} 条，用户 ${result.users.length} 个。</div>`);
+  } catch (error) {
+    setHtml("#match-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+function readManualOrderForm() {
+  return {
+    youzanOrderNo: document.querySelector("#manual-order-no").value.trim(),
+    receiverPhone: document.querySelector("#manual-order-phone").value.trim(),
+    receiverName: document.querySelector("#manual-order-name").value.trim(),
+    productName: document.querySelector("#manual-order-product").value.trim() || "ROOT 7日试饮装",
+    amount: document.querySelector("#manual-order-amount").value || 0,
+    orderStatus: document.querySelector("#manual-order-status").value,
+    deliveryStatus: document.querySelector("#manual-delivery-status").value,
+    rawAddressText: document.querySelector("#manual-order-address").value.trim(),
+  };
+}
+
+async function syncManualOrderFromForm() {
+  try {
+    const data = await api("/api/v1/admin/orders/sync", {
+      method: "POST",
+      body: JSON.stringify(readManualOrderForm()),
+    });
+    selectedOrderId = data.order.orderId;
+    setHtml("#order-sync-result", `<div class="inline-success">已录入订单 ${escapeHtml(data.order.youzanOrderNo)}，可继续选择用户匹配。</div>`);
+    await load();
+    await previewSelectedMatch();
+  } catch (error) {
+    setHtml("#order-sync-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+function bulkOrderTemplate() {
+  const template = sampleTemplateForSource("YOUZAN_ORDER");
+  return template
+    ? template.csvHeader
+    : "有赞订单号,收货人,收货手机号,商品名称,商品ID,实付金额,订单状态,物流状态,支付时间,收货地址";
+}
+
+function readBulkOrderPayload() {
+  const text = document.querySelector("#bulk-order-input").value.trim();
+  if (!text) throw new Error("请先粘贴有赞订单表格内容");
+  return { sourceType: "YOUZAN_ORDER", text };
+}
+
+function renderBulkOrderResult(result = {}, mode = "preview") {
+  const rows = result.rows || [];
+  const summary = `<div class="bulk-summary">
+    <span>总行数 ${result.total || 0}</span>
+    <span>可写入 ${result.importableCount || 0}</span>
+    <span>已写入 ${result.importedCount || 0}</span>
+    <span>错误 ${result.errorCount || 0}</span>
+    <span>提醒 ${result.warningCount || 0}</span>
+  </div>`;
+  const rowsHtml = rows.length
+    ? rows.map((row) => {
+        const mapped = row.mapped || {};
+        const label = row.errors && row.errors.length
+          ? "不可写入"
+          : mode === "import" && row.imported
+            ? "已写入"
+            : row.warnings && row.warnings.length
+              ? "可写入，有提醒"
+              : "可写入";
+        const messages = [
+          ...((row.errors || []).map((item) => `错误：${item}`)),
+          ...((row.warnings || []).map((item) => `提醒：${item}`)),
+        ];
+        return `<div class="bulk-row">
+          <div class="bulk-row-head">
+            <strong>#${row.index} · ${escapeHtml(label)}</strong>
+            <span>${escapeHtml(mapped.deliveryStatus || "-")}</span>
+          </div>
+          <div class="meta">${escapeHtml(mapped.youzanOrderNo || "无订单号")} · ${escapeHtml(mapped.receiverName || "未知收货人")} · ${escapeHtml(maskPhone(mapped.receiverPhone || ""))}</div>
+          ${messages.length ? `<div class="${row.errors && row.errors.length ? "sample-error" : "sample-warning"}">${escapeHtml(messages.join("；"))}</div>` : ""}
+        </div>`;
+      }).join("")
+    : `<div class="meta">暂无订单行。</div>`;
+  setHtml("#bulk-order-result", summary + rowsHtml);
+}
+
+function toggleBulkOrderPanel() {
+  const panel = document.querySelector("#bulk-order-panel");
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden && !document.querySelector("#bulk-order-input").value.trim()) {
+    document.querySelector("#bulk-order-input").placeholder = `${bulkOrderTemplate()}\nYZROOT202605240001,王小路,13800000001,ROOT 7日试饮装,ROOT-PREBIOTIC-TRIAL,199,已支付,已签收,2026-05-24T10:00:00+08:00,上海市样例地址`;
+  }
+}
+
+function insertBulkOrderTemplate() {
+  document.querySelector("#bulk-order-input").value = bulkOrderTemplate();
+  setHtml("#bulk-order-result", `<div class="meta">已填入表头，请从有赞订单表复制真实行后再预览。</div>`);
+}
+
+async function previewBulkOrders() {
+  try {
+    const result = await api("/api/v1/admin/external-samples/preview", {
+      method: "POST",
+      body: JSON.stringify(readBulkOrderPayload()),
+    });
+    renderBulkOrderResult(result, "preview");
+  } catch (error) {
+    setHtml("#bulk-order-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+async function importBulkOrders() {
+  try {
+    const result = await api("/api/v1/admin/external-samples/import", {
+      method: "POST",
+      body: JSON.stringify(readBulkOrderPayload()),
+    });
+    renderBulkOrderResult(result, "import");
+    await load();
+    setHtml("#match-result", `<div class="inline-success">已写入 ${result.importedCount || 0} 条订单，可在左侧待匹配列表继续选择用户。</div>`);
+  } catch (error) {
+    setHtml("#bulk-order-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+async function confirmSelectedMatch() {
+  if (!selectedOrderId || !selectedUserId) {
+    setHtml("#match-result", `<div class="sample-error">请先选择订单和用户。</div>`);
+    return;
+  }
+  const confirmRisks = Boolean(document.querySelector("#confirm-risks").checked);
+  const confirmRebind = Boolean(document.querySelector("#confirm-rebind").checked);
+  const note = document.querySelector("#match-note").value.trim();
+  try {
+    const result = await api("/api/v1/admin/order-matching/confirm", {
+      method: "POST",
+      body: JSON.stringify({ orderId: selectedOrderId, userId: selectedUserId, confirmRisks, confirmRebind, note }),
+    });
+    setHtml("#match-result", `<div class="inline-success">匹配成功：${escapeHtml(result.order.youzanOrderNo)} 已绑定给 ${escapeHtml(result.user.nickname)}。</div>`);
+    currentMatchPreview = null;
+    await load();
+  } catch (error) {
+    setHtml("#match-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+function clearOrderMatchingSelection() {
+  selectedOrderId = "";
+  selectedUserId = "";
+  currentMatchPreview = null;
+  setHtml("#match-result", "");
+  setHtml("#order-sync-result", "");
+  renderOpsDashboard(currentData ? currentData.opsDashboard || {} : {});
+  setHtml("#user-candidates", renderUserCandidateRows(currentData ? currentData.users || [] : [], "暂无用户候选。"));
+  renderMatchPreview(null);
 }
 
 function readinessStatusText(status) {
@@ -208,28 +643,72 @@ function renderReleaseRecord(record = {}) {
     </div>`;
 }
 
-function renderUsers(users, sessions) {
-  document.querySelector("#users").innerHTML = users.length
-    ? users
-        .map((user) => {
-          const session = sessions.find((item) => item.userId === user.userId);
-          return `<div class="row">
-	            <div>
-	              <div class="title">${escapeHtml(user.nickname)} · ${escapeHtml(user.phone)}</div>
-	              <div class="meta">状态：${escapeHtml(user.state)} · 当前周期：${escapeHtml(session ? session.status : "暂无")}</div>
-	            </div>
-	            <div class="task-actions">
-	              <span class="pill">${escapeHtml(user.state)}</span>
-	              <button class="ghost" data-detail-user-id="${escapeHtml(user.userId)}">详情</button>
-	            </div>
-	          </div>`;
-        })
-        .join("")
-    : `<div class="row"><div class="meta">暂无用户，先在小程序登录体验。</div></div>`;
+function normalizeUserRow(user, sessions = []) {
+  const session = sessions.find((item) => item.userId === user.userId);
+  return {
+    ...user,
+    stateLabel: user.stateLabel || user.state || "",
+    currentStatus: user.currentStatus || (session ? session.status : "暂无周期"),
+    currentBlockage: user.currentBlockage || "暂无明显卡点",
+    nextAction: user.nextAction || "保持观察",
+    orderStatusLabel: user.orderStatusLabel || "暂无订单",
+    latestOrderNo: user.latestOrderNo || "",
+    latestCheckinDate: user.latestCheckinDate || user.lastCheckinDate || "",
+    totalRecords: user.totalRecords === undefined ? user.totalCheckinDays || 0 : user.totalRecords,
+    openTaskCount: user.openTaskCount || 0,
+    severity: user.severity || "LOW",
+  };
 }
 
-function renderRefunds(refunds) {
-  document.querySelector("#refunds").innerHTML = refunds.length
+function userMatchesCurrentFilter(user) {
+  if (!currentUserFilter) return true;
+  if (currentUserFilter === "needs_action") return user.openTaskCount > 0 || ["HIGH", "MEDIUM"].includes(user.severity);
+  if (currentUserFilter === "ready_to_start") return user.currentBlockage === "已送达未开始";
+  if (currentUserFilter === "waiting_delivery") return user.currentBlockage === "等待物流送达";
+  if (currentUserFilter === "active") return user.currentStatus === "打卡中" || user.state === "CHECKIN_ACTIVE";
+  if (currentUserFilter === "completed") return user.currentStatus === "已完成" || user.state === "CHECKIN_COMPLETED";
+  return true;
+}
+
+function userMatchesKeyword(user) {
+  if (!currentUserKeyword) return true;
+  const text = [
+    user.nickname,
+    user.phone,
+    user.stateLabel,
+    user.currentStatus,
+    user.currentBlockage,
+    user.nextAction,
+    user.latestOrderNo,
+    user.orderStatusLabel,
+  ].join(" ").toLowerCase();
+  return text.includes(currentUserKeyword.toLowerCase());
+}
+
+function renderUsers(users = [], sessions = []) {
+  const normalized = users.map((user) => normalizeUserRow(user, sessions));
+  const visible = normalized.filter((user) => userMatchesCurrentFilter(user) && userMatchesKeyword(user));
+  setHtml("#users", visible.length
+    ? visible
+        .map((user) => `
+          <div class="row user-row">
+            <div>
+              <div class="title">${escapeHtml(user.nickname)} · ${escapeHtml(user.phone)}</div>
+              <div class="meta">状态：${escapeHtml(user.stateLabel)} · ${escapeHtml(user.currentStatus)} · 待办 ${user.openTaskCount || 0}</div>
+              <div class="meta">卡点：${escapeHtml(user.currentBlockage)} · 下一步：${escapeHtml(user.nextAction)}</div>
+              <div class="meta">订单：${escapeHtml(user.latestOrderNo || "暂无")} · ${escapeHtml(user.orderStatusLabel)} · 记录 ${user.totalRecords || 0} 次${user.latestCheckinDate ? ` · 最近 ${escapeHtml(formatDateCn(user.latestCheckinDate, dashboardReferenceDate()))}` : ""}</div>
+            </div>
+            <div class="task-actions">
+              <span class="pill priority-${escapeHtml(String(user.severity || "").toLowerCase())}">${escapeHtml(user.currentBlockage)}</span>
+              <button class="ghost" data-detail-user-id="${escapeHtml(user.userId)}">详情</button>
+            </div>
+          </div>`)
+        .join("")
+    : `<div class="row"><div class="meta">暂无匹配用户。</div></div>`);
+}
+
+function renderRefunds(refunds = []) {
+  setHtml("#refunds", refunds.length
     ? refunds
         .map((refund) => {
           const id = refund.refund_work_item_id || refund.refund_id;
@@ -242,11 +721,12 @@ function renderRefunds(refunds) {
         </div>`;
         })
         .join("")
-    : `<div class="row"><div class="meta">暂无免单申请。</div></div>`;
+    : `<div class="row"><div class="meta">暂无免单申请。</div></div>`);
 }
 
 function renderTaskFilter(tasks) {
   const select = document.querySelector("#task-filter");
+  if (!select) return;
   const types = [...new Set(tasks.map((task) => task.taskType || task.task_type).filter(Boolean))].sort();
   select.innerHTML = `<option value="">全部类型</option>` + types
     .map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`)
@@ -256,6 +736,7 @@ function renderTaskFilter(tasks) {
 }
 
 function renderTasks(tasks) {
+  if (!document.querySelector("#tasks")) return;
   const visibleTasks = currentTaskType
     ? tasks.filter((task) => (task.taskType || task.task_type) === currentTaskType)
     : tasks;
@@ -269,7 +750,7 @@ function renderTasks(tasks) {
             <div>
               <div class="title">${escapeHtml(type)} · ${escapeHtml(user)}</div>
               <div class="meta">${escapeHtml(task.reason || "待处理")}</div>
-              <div class="meta">动作：${escapeHtml(task.suggestedAction || task.suggested_action || "联系用户确认")}</div>
+              <div class="meta">动作：${escapeHtml(task.suggestedAction || task.suggested_action || "复制跟进话术，人工确认后标记状态")}</div>
 	            <div class="script">话术：${escapeHtml(task.suggestedScript || task.suggested_script || "您好，我来确认一下今天的打卡情况。")}</div>
 	          </div>
 	          <div class="task-actions">
@@ -285,7 +766,7 @@ function renderTasks(tasks) {
 }
 
 function renderReadyUsers(items) {
-  document.querySelector("#ready-users").innerHTML = items.length
+  setHtml("#ready-users", items.length
     ? items
         .map((item) => `<div class="row">
           <div>
@@ -298,7 +779,7 @@ function renderReadyUsers(items) {
 	          </div>
 	        </div>`)
         .join("")
-    : `<div class="row"><div class="meta">暂无已送达待开始用户。</div></div>`;
+    : `<div class="row"><div class="meta">暂无已送达待开始用户。</div></div>`);
 }
 
 function renderCoupons(summary = {}, coupons = []) {
@@ -495,27 +976,39 @@ function renderList(items, emptyText, mapper) {
 
 function renderUserDetail(detail) {
   const user = detail.user || {};
+  const ops = detail.opsSummary || {};
   const profile = detail.profile || {};
   const refund = detail.refund || {};
   const refundEligibility = refund.eligibility || {};
   document.querySelector("#user-detail").innerHTML = `
     <div class="detail-grid">
+      <section class="detail-section wide detail-summary-card">
+        <div>
+          <h3>${escapeHtml(user.nickname || "ROOT用户")} · ${escapeHtml(user.phone || "")}</h3>
+          <p>${escapeHtml(ops.currentBlockage || "暂无明显卡点")}</p>
+          <span>${escapeHtml(ops.nextAction || "保持观察")}</span>
+        </div>
+        <div class="task-actions">
+          <span class="pill priority-${escapeHtml(String(ops.severity || "LOW").toLowerCase())}">${escapeHtml(ops.currentStatus || user.state || "-")}</span>
+          <button data-follow-user-id="${escapeHtml(user.userId)}" data-source-type="MANUAL" data-source-id="USER_DETAIL" data-reason="${escapeHtml(`人工跟进：${ops.currentBlockage || "用户详情"}`)}">生成跟进待办</button>
+        </div>
+      </section>
       <section class="detail-section">
-        <h3>${escapeHtml(user.nickname || "ROOT用户")} · ${escapeHtml(user.phone || "")}</h3>
+        <h3>当前状态</h3>
         ${renderKeyValues([
-          ["状态", user.state],
-          ["总打卡", user.totalCheckinDays],
-          ["当前连续", user.currentStreak],
-          ["最长连续", user.longestStreak],
+          ["状态", ops.stateLabel || user.state],
+          ["当前周期", ops.currentStatus],
+          ["订单状态", ops.orderStatusLabel],
+          ["待办数", ops.openTaskCount],
+          ["最近记录", ops.latestCheckinDate ? formatDateCn(ops.latestCheckinDate, dashboardReferenceDate()) : ""],
         ])}
       </section>
       <section class="detail-section">
-        <h3>画像</h3>
+        <h3>身体反馈画像</h3>
         ${renderKeyValues([
           ["参与原因", Array.isArray(profile.join_reasons) ? profile.join_reasons.join(", ") : ""],
           ["肠道状态", profile.gut_health_status],
           ["改善方式", Array.isArray(profile.improvement_methods) ? profile.improvement_methods.join(", ") : ""],
-          ["日常便型", profile.stool_type],
         ])}
       </section>
       <section class="detail-section">
@@ -548,13 +1041,13 @@ function renderUserDetail(detail) {
         <h3>打卡记录</h3>
         ${renderList(detail.records || [], "暂无打卡记录", (record) => `
           <div class="mini-row">
-            <strong>Day${record.day_index} · ${escapeHtml(record.checkin_date)}</strong>
+            <strong>Day${record.day_index} · ${escapeHtml(formatDateCn(record.checkin_date, dashboardReferenceDate()))}</strong>
             <span>${escapeHtml(record.stool_type || "无便型")} · ${escapeHtml(record.feedback || "无反馈")}</span>
           </div>
         `)}
       </section>
       <section class="detail-section wide">
-        <h3>问卷</h3>
+        <h3>问卷记录</h3>
         ${renderList(detail.questionnaireResponses || [], "暂无问卷", (item) => `
           <div class="mini-row">
             <strong>${escapeHtml(item.questionnaire_type)}</strong>
@@ -567,11 +1060,11 @@ function renderUserDetail(detail) {
         ${renderList(detail.feedbacks || [], "暂无反馈", (item) => `
           <div class="feedback-row">
             <div>
-              <strong>${escapeHtml(item.title)} · ${escapeHtml(item.date)}</strong>
+              <strong>${escapeHtml(item.title)} · ${escapeHtml(formatDateCn(item.date, dashboardReferenceDate()))}</strong>
               <p>${escapeHtml(item.text || "图片/便型反馈")}</p>
               <span class="pill">${escapeHtml(item.severity)}</span>
             </div>
-            <button data-follow-user-id="${escapeHtml(user.userId)}" data-source-type="${escapeHtml(item.sourceType)}" data-source-id="${escapeHtml(item.sourceId)}" data-reason="${escapeHtml(`${item.title}：${item.text || "需要跟进"}`)}">生成 follow</button>
+            <button data-follow-user-id="${escapeHtml(user.userId)}" data-source-type="${escapeHtml(item.sourceType)}" data-source-id="${escapeHtml(item.sourceId)}" data-reason="${escapeHtml(`${item.title}：${item.text || "需要跟进"}`)}">生成跟进待办</button>
           </div>
         `)}
       </section>
@@ -587,6 +1080,10 @@ function renderUserDetail(detail) {
     </div>`;
 }
 
+function renderCurrentUsers() {
+  renderUsers(currentData ? currentData.opsUsers || currentData.users || [] : [], currentData ? currentData.sessions || [] : []);
+}
+
 async function loadUserDetail(userId) {
   currentDetailUserId = userId;
   const detail = await api(`/api/v1/admin/users/${encodeURIComponent(userId)}/detail`);
@@ -597,12 +1094,14 @@ async function load() {
   const data = await api("/api/v1/admin/dashboard");
   currentData = data;
   currentSampleTemplates = data.externalSampleTemplates || [];
+  renderOpsDashboard(data.opsDashboard || {});
   renderMetrics(data.metrics);
   renderSummary(data.summary);
   renderLaunchReadiness(data.launchReadiness);
   renderAdapterCalibration(data.adapterCalibration || {});
   renderReleaseRecord(data.releaseRecord || {});
-  renderUsers(data.users, data.sessions);
+  renderCurrentUsers();
+  setHtml("#user-candidates", renderUserCandidateRows(data.users || [], "暂无用户候选。"));
   renderRefunds(data.refunds);
   renderTaskFilter(data.operationTasks || []);
   renderTasks(data.operationTasks || []);
@@ -612,31 +1111,97 @@ async function load() {
   renderExternalAdapterReadiness(data.externalAdapterReadiness || {});
   renderExternalAdapters(data.externalAdapterCatalog || {}, data.externalAdapterRuns || []);
   renderSampleReviews(data.externalSampleReviews || []);
+  if (selectedOrderId || selectedUserId) await previewSelectedMatch();
   if (currentDetailUserId) await loadUserDetail(currentDetailUserId);
 }
 
-document.querySelector("#refresh").addEventListener("click", load);
-document.querySelector("#run-audit").addEventListener("click", async () => {
+function on(selector, eventName, handler) {
+  const element = document.querySelector(selector);
+  if (element) element.addEventListener(eventName, handler);
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.setAttribute("readonly", "readonly");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+}
+
+on("#refresh", "click", load);
+on("#run-audit", "click", async () => {
   await api("/api/v1/jobs/daily-audit", { method: "POST", body: JSON.stringify({}) });
   await load();
 });
-document.querySelector("#task-filter").addEventListener("change", (event) => {
+on(".tab-nav", "click", (event) => {
+  const button = event.target.closest("button[data-tab]");
+  if (!button) return;
+  setActiveTab(button.dataset.tab);
+});
+document.body.addEventListener("click", (event) => {
+  const link = event.target.closest("[data-target-tab]");
+  if (!link) return;
+  setActiveTab(link.dataset.targetTab);
+});
+document.body.addEventListener("click", async (event) => {
+  const orderButton = event.target.closest("[data-select-order-id]");
+  if (orderButton) {
+    selectedOrderId = orderButton.dataset.selectOrderId;
+    setActiveTab("orders");
+    await previewSelectedMatch();
+    return;
+  }
+  const userButton = event.target.closest("[data-select-user-id]");
+  if (userButton) {
+    selectedUserId = userButton.dataset.selectUserId;
+    setActiveTab("orders");
+    await previewSelectedMatch();
+  }
+});
+on("#search-order-matching", "click", searchOrderMatching);
+on("#order-match-search", "keydown", (event) => {
+  if (event.key === "Enter") searchOrderMatching();
+});
+on("#clear-order-matching", "click", clearOrderMatchingSelection);
+on("#sync-order", "click", syncManualOrderFromForm);
+on("#confirm-match", "click", confirmSelectedMatch);
+on("#toggle-bulk-orders", "click", toggleBulkOrderPanel);
+on("#insert-bulk-order-template", "click", insertBulkOrderTemplate);
+on("#preview-bulk-orders", "click", previewBulkOrders);
+on("#import-bulk-orders", "click", importBulkOrders);
+on("#task-filter", "change", (event) => {
   currentTaskType = event.target.value;
   renderTasks(currentData ? currentData.operationTasks || [] : []);
 });
-document.querySelector("#sample-source").addEventListener("change", () => {
+on("#user-search", "input", (event) => {
+  currentUserKeyword = event.target.value.trim();
+  renderCurrentUsers();
+});
+on("#user-filter", "change", (event) => {
+  currentUserFilter = event.target.value;
+  renderCurrentUsers();
+});
+on("#sample-source", "change", () => {
   setSamplePlaceholder();
   renderSampleTemplate();
   document.querySelector("#sample-result").innerHTML = `<div class="meta">粘贴 JSON、CSV 或表格文本后先预览校验，再导入可识别样本。</div>`;
 });
-document.querySelector("#insert-sample-template").addEventListener("click", () => {
+on("#insert-sample-template", "click", () => {
   const source = document.querySelector("#sample-source").value;
   const template = sampleTemplateForSource(source);
   if (!template) return;
   document.querySelector("#sample-input").value = template.csvTemplate || template.csvHeader || "";
   document.querySelector("#sample-result").innerHTML = `<div class="meta">已填入 CSV 模板，请把空行补成真实导出样本后再预览。</div>`;
 });
-document.querySelector("#preview-samples").addEventListener("click", async () => {
+on("#preview-samples", "click", async () => {
   try {
     const data = await api("/api/v1/admin/external-samples/preview", {
       method: "POST",
@@ -647,7 +1212,7 @@ document.querySelector("#preview-samples").addEventListener("click", async () =>
     document.querySelector("#sample-result").innerHTML = `<div class="sample-error">${escapeHtml(error.message)}</div>`;
   }
 });
-document.querySelector("#import-samples").addEventListener("click", async () => {
+on("#import-samples", "click", async () => {
   try {
     const data = await api("/api/v1/admin/external-samples/import", {
       method: "POST",
@@ -659,7 +1224,7 @@ document.querySelector("#import-samples").addEventListener("click", async () => 
     document.querySelector("#sample-result").innerHTML = `<div class="sample-error">${escapeHtml(error.message)}</div>`;
   }
 });
-document.querySelector("#sample-reviews").addEventListener("click", async (event) => {
+on("#sample-reviews", "click", async (event) => {
   const button = event.target.closest("button[data-map-value]");
   if (!button) return;
   const row = button.closest(".mapping-row");
@@ -675,35 +1240,49 @@ document.querySelector("#sample-reviews").addEventListener("click", async (event
   });
   await load();
 });
-document.querySelector("#refunds").addEventListener("click", async (event) => {
+on("#refunds", "click", async (event) => {
   const id = event.target.dataset.id;
   if (!id) return;
   await api(`/api/v1/admin/refunds/${id}/approve`, { method: "POST" });
   await load();
 });
-document.querySelector("#coupons").addEventListener("click", async (event) => {
+on("#coupons", "click", async (event) => {
   const couponId = event.target.dataset.couponId;
   if (!couponId) return;
   await api(`/api/v1/admin/coupons/${couponId}/use`, { method: "POST" });
   await load();
 });
-document.querySelector("#tasks").addEventListener("click", async (event) => {
+async function handleTaskAction(event) {
+  const copyScript = event.target.dataset.copyScript;
+  if (copyScript) {
+    await copyText(copyScript);
+    event.target.textContent = "已复制";
+    return;
+  }
   const taskId = event.target.dataset.taskId;
   if (!taskId) return;
   await api(`/api/v1/admin/tasks/${taskId}/complete`, {
     method: "POST",
-    body: JSON.stringify({ status: event.target.dataset.status || "DONE" }),
+    body: JSON.stringify({
+      status: event.target.dataset.status || "DONE",
+      note: event.target.dataset.note || "",
+    }),
   });
   await load();
+}
+
+["#tasks", "#priority-tasks"].forEach((selector) => {
+  on(selector, "click", handleTaskAction);
 });
-["#users", "#tasks", "#ready-users"].forEach((selector) => {
-  document.querySelector(selector).addEventListener("click", async (event) => {
+["#users", "#tasks", "#priority-tasks", "#ready-users", "#ready-users-preview", "#risk-feedbacks", "#risk-feedback-preview"].forEach((selector) => {
+  on(selector, "click", async (event) => {
     const userId = event.target.dataset.detailUserId;
     if (!userId) return;
     await loadUserDetail(userId);
+    setActiveTab("users");
   });
 });
-document.querySelector("#user-detail").addEventListener("click", async (event) => {
+on("#user-detail", "click", async (event) => {
   const userId = event.target.dataset.followUserId;
   if (!userId) return;
   await api(`/api/v1/admin/users/${encodeURIComponent(userId)}/follow`, {
