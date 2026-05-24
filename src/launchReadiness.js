@@ -44,7 +44,7 @@ function wechatCheck(env, target) {
     return makeCheck("wechat_credentials", "微信登录密钥", "PASS", "已配置微信登录所需密钥。", { hasAppid: true, hasSecret: true });
   }
   const status = target === "production" ? "BLOCKER" : "WARNING";
-  return makeCheck("wechat_credentials", "微信登录密钥", status, "未配置 WECHAT_APPID / WECHAT_APPSECRET 时，只能使用演示手机号或灰度手工链路。", {
+  return makeCheck("wechat_credentials", "微信登录密钥", status, "未配置 WECHAT_APPID / WECHAT_APPSECRET 时，正式手机号授权登录无法完成。", {
     hasAppid: Boolean(appid),
     hasSecret: Boolean(secret),
   });

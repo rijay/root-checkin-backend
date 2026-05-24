@@ -16,6 +16,8 @@ const {
   parseArgs: parseAdapterArgs,
 } = require("../scripts/adapter-runner");
 
+const directPhoneLoginEnv = { ROOT_ALLOW_DIRECT_PHONE_LOGIN: "true" };
+
 function listen(server) {
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
@@ -42,7 +44,7 @@ async function textRequest(baseUrl, path) {
 }
 
 test("serves the REST API and admin dashboard data", async (t) => {
-  const server = createApp();
+  const server = createApp({ env: directPhoneLoginEnv });
   const baseUrl = await listen(server);
   t.after(() => server.close());
 
@@ -128,6 +130,20 @@ test("serves the REST API and admin dashboard data", async (t) => {
   });
   assert.equal(follow.code, 0);
   assert.equal(follow.data.task.taskType, "FEEDBACK_FOLLOW");
+});
+
+test("HTTP login rejects direct phone payload when direct phone login is not enabled", async (t) => {
+  const server = createApp();
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+
+  const login = await request(baseUrl, "/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ phone: "13800000001" }),
+  });
+
+  assert.equal(login.code, 1007);
+  assert.match(login.message, /微信手机号授权/);
 });
 
 test("external platform adapter Interface exposes catalog and manual sample runs", async (t) => {
@@ -230,7 +246,7 @@ test("JSON file store persists HTTP mutations across app restarts", async (t) =>
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "root-store-"));
   const storePath = path.join(tempDir, "store.json");
   const firstStore = createJsonFileStore(storePath);
-  const server = createApp({ storeAdapter: firstStore });
+  const server = createApp({ storeAdapter: firstStore, env: directPhoneLoginEnv });
   const baseUrl = await listen(server);
   t.after(() => server.close());
 
@@ -262,7 +278,7 @@ test("SQLite store persists HTTP mutations across app restarts", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "root-sqlite-store-"));
   const storePath = path.join(tempDir, "store.sqlite");
   const firstStore = createSqliteStore(storePath);
-  const server = createApp({ storeAdapter: firstStore });
+  const server = createApp({ storeAdapter: firstStore, env: directPhoneLoginEnv });
   const baseUrl = await listen(server);
 
   const login = await request(baseUrl, "/api/v1/auth/login", {

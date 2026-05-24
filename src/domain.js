@@ -42,7 +42,8 @@ const ROUTE_PERMISSIONS = {
   "/pages/home/index": [STATES.GUEST, STATES.UNREGISTERED, STATES.REGISTERED_IDLE, STATES.CHECKIN_ACTIVE, STATES.CHECKIN_COMPLETED, STATES.CHECKIN_FAILED, STATES.DAILY_USER],
   "/subpkg/checkin/pages/today/index": [STATES.CHECKIN_ACTIVE, STATES.DAILY_USER],
   "/subpkg/checkin/pages/history/index": [STATES.CHECKIN_ACTIVE, STATES.CHECKIN_COMPLETED, STATES.CHECKIN_FAILED, STATES.DAILY_USER],
-  "/subpkg/checkin/pages/result/index": [STATES.CHECKIN_COMPLETED, STATES.CHECKIN_FAILED],
+  "/subpkg/checkin/pages/result/index": [STATES.CHECKIN_ACTIVE, STATES.CHECKIN_COMPLETED, STATES.CHECKIN_FAILED, STATES.DAILY_USER],
+  "/subpkg/checkin/pages/share-poster/index": [STATES.CHECKIN_ACTIVE, STATES.CHECKIN_COMPLETED, STATES.DAILY_USER],
   "/subpkg/checkin/pages/questionnaire/index": [STATES.CHECKIN_ACTIVE, STATES.CHECKIN_COMPLETED],
   "/subpkg/refund/pages/apply/index": [STATES.CHECKIN_COMPLETED],
   "/subpkg/refund/pages/status/index": [STATES.CHECKIN_COMPLETED, STATES.DAILY_USER],
@@ -108,11 +109,15 @@ function createStore() {
   return createSeedData();
 }
 
-function getWechatConfig() {
+function getWechatConfig(env = process.env) {
   return {
-    appid: process.env.WECHAT_APPID || process.env.WX_APPID || "",
-    secret: process.env.WECHAT_APPSECRET || process.env.WECHAT_SECRET || process.env.WX_SECRET || "",
+    appid: env.WECHAT_APPID || env.WX_APPID || "",
+    secret: env.WECHAT_APPSECRET || env.WECHAT_SECRET || env.WX_SECRET || "",
   };
+}
+
+function isDirectPhoneLoginAllowed(env = process.env) {
+  return String(env.ROOT_ALLOW_DIRECT_PHONE_LOGIN || "").toLowerCase() === "true";
 }
 
 function maskPhone(phone) {
@@ -270,7 +275,7 @@ function loginByPhone(data, body, phone) {
   if (!user) {
     user = {
       user_id: createId("usr"),
-      openid: body.openid || `mock_openid_${phone}`,
+      openid: body.openid || "",
       unionid: body.unionid || "",
       phone,
       nickname: body.nickname || "ROOT体验官",
@@ -287,7 +292,7 @@ function loginByPhone(data, body, phone) {
     };
     data.users.push(user);
   } else {
-    if (body.openid && user.openid.startsWith("mock_openid_")) user.openid = body.openid;
+    if (body.openid && !user.openid) user.openid = body.openid;
     if (body.unionid && !user.unionid) user.unionid = body.unionid;
   }
 
@@ -296,15 +301,18 @@ function loginByPhone(data, body, phone) {
 }
 
 function login(data, body = {}) {
-  const phone = normalizePhone(body.phone || body.demoPhone || "13800000001");
+  const phone = normalizePhone(body.phone);
   return loginByPhone(data, body, phone);
 }
 
-async function loginWithWechat(data, body = {}) {
-  const shouldUseWechatPhone = !body.useMockPhone && !body.phone && body.phoneCode;
-  if (!shouldUseWechatPhone) return login(data, body);
+async function loginWithWechat(data, body = {}, env = process.env) {
+  const shouldUseWechatPhone = !body.phone && body.phoneCode;
+  if (!shouldUseWechatPhone) {
+    if (!isDirectPhoneLoginAllowed(env)) throw businessError(1007, "请使用微信手机号授权登录");
+    return login(data, body);
+  }
 
-  const config = getWechatConfig();
+  const config = getWechatConfig(env);
   if (!config.appid || !config.secret) throw businessError(1006, "服务端未配置微信登录密钥");
 
   const [session, phone] = await Promise.all([
