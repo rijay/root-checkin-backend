@@ -26,14 +26,26 @@ function mergeDefaults(target, defaults) {
   return next;
 }
 
-function normalizeStoreData(rawData) {
-  return mergeDefaults(rawData || {}, createSeedData());
+function createEmptyData() {
+  const data = createSeedData();
+  data.youzanOrders = [];
+  data.orderFulfillments = [];
+  data.events = [];
+  return data;
 }
 
-function createMemoryStore(initialData) {
+function defaultsForOptions(options = {}) {
+  return options.seedSampleData ? createSeedData() : createEmptyData();
+}
+
+function normalizeStoreData(rawData, options = {}) {
+  return mergeDefaults(rawData || {}, defaultsForOptions(options));
+}
+
+function createMemoryStore(initialData, options = { seedSampleData: true }) {
   return {
     kind: "memory",
-    data: normalizeStoreData(initialData || createSeedData()),
+    data: normalizeStoreData(initialData || defaultsForOptions(options), options),
     save() {},
   };
 }
@@ -52,10 +64,10 @@ function writeJsonFile(filePath, data) {
   fs.renameSync(tempPath, filePath);
 }
 
-function createJsonFileStore(filePath) {
+function createJsonFileStore(filePath, options = {}) {
   if (!filePath) throw new Error("JSON store path is required");
   const absolutePath = path.resolve(filePath);
-  const data = normalizeStoreData(readJsonFile(absolutePath) || createSeedData());
+  const data = normalizeStoreData(readJsonFile(absolutePath) || defaultsForOptions(options), options);
   const adapter = {
     kind: "json-file",
     filePath: absolutePath,
@@ -68,7 +80,7 @@ function createJsonFileStore(filePath) {
   return adapter;
 }
 
-function createSqliteStore(filePath) {
+function createSqliteStore(filePath, options = {}) {
   if (!filePath) throw new Error("SQLite store path is required");
   const { DatabaseSync } = require("node:sqlite");
   const absolutePath = path.resolve(filePath);
@@ -85,7 +97,7 @@ function createSqliteStore(filePath) {
     );
   `);
   const row = db.prepare("SELECT payload_json FROM root_store_snapshot WHERE store_key = ?").get(SQLITE_STORE_KEY);
-  const data = normalizeStoreData(row ? JSON.parse(row.payload_json) : createSeedData());
+  const data = normalizeStoreData(row ? JSON.parse(row.payload_json) : defaultsForOptions(options), options);
 
   const adapter = {
     kind: "sqlite",
@@ -120,6 +132,7 @@ function createSqliteStore(filePath) {
 
 module.exports = {
   createJsonFileStore,
+  createEmptyData,
   createMemoryStore,
   createSqliteStore,
   normalizeStoreData,

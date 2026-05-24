@@ -115,7 +115,7 @@ test("release smoke: canonical mini-program routes point to subpackages", () => 
   assert.ok(refundPackage);
   assert.deepEqual(
     checkinPackage.pages.sort(),
-    ["pages/history/index", "pages/questionnaire/index", "pages/result/index", "pages/today/index"].sort()
+    ["pages/history/index", "pages/questionnaire/index", "pages/result/index", "pages/share-poster/index", "pages/today/index"].sort()
   );
   assert.deepEqual(refundPackage.pages.sort(), ["pages/apply/index", "pages/status/index"].sort());
 });

@@ -77,7 +77,7 @@ WEWORK_CONTACT_LIST_CURSOR_PATH=data.nextCursor
 WEWORK_CONTACT_FIELD_MAP={"externalContactId":"external_userid","remarkName":"remark","receiverPhone":"mobile"}
 ```
 
-正式环境登录会使用 `wx.login` 和 `getPhoneNumber` 返回的 code，到微信服务端换取 openid 和手机号。未配置 `WECHAT_APPID` / `WECHAT_APPSECRET` 时，正式手机号登录会拒绝执行，避免误用演示手机号。
+正式环境登录会使用 `wx.login` 和 `getPhoneNumber` 返回的 code，到微信服务端换取 openid 和手机号。未配置 `WECHAT_APPID` / `WECHAT_APPSECRET` 时，正式手机号登录会拒绝执行，避免无授权手机号进入。
 
 `ROOT_STORE_FILE` 是可选项：不设置时使用内存 Adapter；设置后每次 HTTP Interface 请求结束会保存到该 JSON 文件。JSON 文件 Adapter 只建议用于内部灰度和运营试跑。
 
