@@ -769,6 +769,150 @@ test("daily audit adds questionnaire and refund work items to operations summary
   assert.equal(dashboard.operationTasks.some((task) => task.taskType === "REFUND_PENDING" && task.user), true);
 });
 
+test("admin ops dashboard summarizes operator metrics and prioritized tasks", () => {
+  const store = domain.createStore();
+  const manualToken = register(store, "13800000888");
+  assert.throws(() => domain.startCheckin(store, manualToken, { confirmReceived: true }, "2026-04-26"), /请先匹配/);
+
+  const readyToken = register(store, "13800000002");
+  domain.matchOrder(store, readyToken, { phone: "13800000002" }, "2026-04-26");
+  domain.updateOrderFulfillment(store, { orderId: "ord_root_002", deliveryStatus: "DELIVERED" }, "2026-04-27");
+
+  const feedbackToken = register(store, "13800000001");
+  startMatchedCheckin(store, feedbackToken);
+  domain.submitCheckin(
+    store,
+    feedbackToken,
+    { dayIndex: 1, tookProduct: true, hadStool: true, stoolType: "type7", feedback: "今天不太舒服" },
+    "2026-04-26"
+  );
+  domain.syncManualOrder(store, {
+    youzanOrderNo: "YZROOT202605240001",
+    receiverName: "待匹配用户",
+    receiverPhone: "13800009991",
+    productName: "ROOT 7日试饮装",
+    amount: 199,
+    orderStatus: "PAID",
+    deliveryStatus: "SHIPPED",
+  });
+
+  const dashboard = domain.adminDashboard(store).data.opsDashboard;
+  const metrics = Object.fromEntries(dashboard.metrics.map((item) => [item.key, item.value]));
+
+  assert.equal(metrics.pendingOrders, 1);
+  assert.equal(metrics.readyToStart, 1);
+  assert.equal(metrics.riskFeedbacks, 1);
+  assert.equal(dashboard.priorityTasks[0].taskType, "MANUAL_REVIEW_REQUIRED");
+  assert.equal(dashboard.priorityTasks[0].label, "需要人工确认");
+  assert.equal(dashboard.pendingOrders[0].youzanOrderNo, "YZROOT202605240001");
+  assert.equal(dashboard.readyToStartUsers[0].order.orderId, "ord_root_002");
+  assert.equal(dashboard.riskFeedbacks[0].title, "Day1 打卡反馈");
+});
+
+test("admin order matching searches candidates and previews a clean match", () => {
+  const store = domain.createStore();
+  const token = register(store, "13800000001");
+  const userId = domain.getUserState(store, token).data.user.userId;
+
+  const search = domain.searchAdminOrderMatching(store, { q: "13800000001" }).data;
+  const preview = domain.previewAdminOrderMatch(store, { orderId: "ord_root_001", userId }).data;
+  const confirmed = domain.confirmAdminOrderMatch(store, { orderId: "ord_root_001", userId }, "2026-04-28").data;
+
+  assert.equal(search.orders.some((order) => order.youzanOrderNo === "YZROOT202604260001"), true);
+  assert.equal(search.users.some((user) => user.userId === userId), true);
+  assert.equal(preview.risks.length, 0);
+  assert.equal(preview.canConfirm, true);
+  assert.equal(confirmed.order.userId, userId);
+  assert.equal(confirmed.order.matchSource, "ADMIN_MANUAL_MATCH");
+  assert.equal(confirmed.task.task_type, "DELIVERED_NOT_STARTED");
+});
+
+test("admin order matching requires risk confirmation for phone mismatch", () => {
+  const store = domain.createStore();
+  const token = register(store, "13800000003");
+  const userId = domain.getUserState(store, token).data.user.userId;
+
+  const preview = domain.previewAdminOrderMatch(store, { orderId: "ord_root_001", userId }).data;
+
+  assert.equal(preview.risks.some((item) => item.type === "PHONE_MISMATCH"), true);
+  assert.equal(preview.requiresSecondConfirm, true);
+  assert.throws(() => domain.confirmAdminOrderMatch(store, { orderId: "ord_root_001", userId }), /请先确认风险提示/);
+
+  const confirmed = domain.confirmAdminOrderMatch(store, { orderId: "ord_root_001", userId, confirmRisks: true }, "2026-04-28").data;
+  assert.equal(confirmed.success, true);
+  assert.equal(confirmed.order.userId, userId);
+});
+
+test("admin order matching protects order rebind with note", () => {
+  const store = domain.createStore();
+  const firstToken = register(store, "13800000001");
+  const firstUserId = domain.getUserState(store, firstToken).data.user.userId;
+  domain.confirmAdminOrderMatch(store, { orderId: "ord_root_001", userId: firstUserId }, "2026-04-28");
+
+  const secondToken = register(store, "13800000003");
+  const secondUserId = domain.getUserState(store, secondToken).data.user.userId;
+  const preview = domain.previewAdminOrderMatch(store, { orderId: "ord_root_001", userId: secondUserId }).data;
+
+  assert.equal(preview.canConfirm, false);
+  assert.equal(preview.risks.some((item) => item.type === "ORDER_BOUND_TO_OTHER_USER"), true);
+  assert.throws(
+    () => domain.confirmAdminOrderMatch(store, { orderId: "ord_root_001", userId: secondUserId, confirmRisks: true }),
+    /确认改绑必须/
+  );
+
+  const confirmed = domain.confirmAdminOrderMatch(store, {
+    orderId: "ord_root_001",
+    userId: secondUserId,
+    confirmRisks: true,
+    confirmRebind: true,
+    note: "用户提供新手机号凭证",
+  }, "2026-04-28").data;
+  assert.equal(confirmed.order.userId, secondUserId);
+  assert.equal(store.youzanOrders.find((order) => order.order_id === "ord_root_001").user_id, secondUserId);
+});
+
+test("admin order matching creates exception task after matching abnormal fulfillment", () => {
+  const store = domain.createStore();
+  const token = register(store, "13800000999");
+  const userId = domain.getUserState(store, token).data.user.userId;
+  domain.syncManualOrder(store, {
+    youzanOrderNo: "YZROOT202605240999",
+    receiverName: "异常用户",
+    receiverPhone: "13800000999",
+    amount: 199,
+    deliveryStatus: "EXCEPTION",
+  });
+
+  const preview = domain.previewAdminOrderMatch(store, { youzanOrderNo: "YZROOT202605240999", userId }).data;
+  const confirmed = domain.confirmAdminOrderMatch(store, {
+    youzanOrderNo: "YZROOT202605240999",
+    userId,
+    confirmRisks: true,
+  }, "2026-05-24").data;
+
+  assert.equal(preview.risks.some((item) => item.type === "FULFILLMENT_EXCEPTION"), true);
+  assert.equal(confirmed.task.task_type, "FULFILLMENT_EXCEPTION");
+});
+
+test("admin user rows expose operator status and blockage summary", () => {
+  const store = domain.createStore();
+  const token = register(store, "13800000001");
+  const userId = domain.getUserState(store, token).data.user.userId;
+  domain.confirmAdminOrderMatch(store, { orderId: "ord_root_001", userId }, "2026-04-28");
+
+  const dashboard = domain.adminDashboard(store).data;
+  const row = dashboard.opsUsers.find((item) => item.userId === userId);
+  const detail = domain.getAdminUserDetail(store, userId).data;
+
+  assert.equal(row.currentBlockage, "已送达未开始");
+  assert.equal(row.nextAction, "提醒用户进入小程序开始记录");
+  assert.equal(row.orderStatusLabel, "已签收");
+  assert.equal(row.totalRecords, 0);
+  assert.equal(row.openTaskCount, 1);
+  assert.equal(detail.opsSummary.currentBlockage, "已送达未开始");
+  assert.equal(detail.opsSummary.latestOrderNo, "YZROOT202604260001");
+});
+
 test("admin user detail aggregates feedback and can create follow tasks", () => {
   const store = domain.createStore();
   const token = register(store);
@@ -787,6 +931,8 @@ test("admin user detail aggregates feedback and can create follow tasks", () => 
   assert.equal(detail.user.userId, userId);
   assert.equal(detail.orders.length, 1);
   assert.equal(detail.records.length, 1);
+  assert.equal(detail.opsSummary.currentBlockage, "打卡进行中");
+  assert.equal(detail.opsSummary.totalRecords, 1);
   assert.equal(feedback.sourceType, "CHECKIN_RECORD");
   assert.equal(feedback.severity, "HIGH");
 

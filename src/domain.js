@@ -1,6 +1,9 @@
 const crypto = require("node:crypto");
 const { addDays, daysBetween, nowISO, todayISO } = require("./dates");
 const adapterCalibration = require("./adapterCalibration");
+const adminOrderMatching = require("./adminOrderMatching");
+const adminOpsPresenter = require("./adminOpsPresenter");
+const adminUserPresenter = require("./adminUserPresenter");
 const coupon = require("./coupon");
 const externalAdapterSamples = require("./externalAdapterSamples");
 const externalPlatformAdapters = require("./externalPlatformAdapters");
@@ -1075,6 +1078,18 @@ function syncManualOrder(data, body) {
   return response({ success: true, order: orderFulfillment.toOrderPayload(data, order) });
 }
 
+function searchAdminOrderMatching(data, query = {}) {
+  return response(adminOrderMatching.searchOrderMatchingCandidates(data, query));
+}
+
+function previewAdminOrderMatch(data, body = {}) {
+  return response(adminOrderMatching.previewOrderMatch(data, body));
+}
+
+function confirmAdminOrderMatch(data, body = {}, dateText = todayISO()) {
+  return response(adminOrderMatching.confirmOrderMatch(data, body, dateText));
+}
+
 function sampleInputFromBody(body = {}) {
   return body.samples !== undefined ? body.samples : body.text;
 }
@@ -1244,6 +1259,7 @@ function getAdminUserDetail(data, userId) {
     leadProfiles: data.leadProfiles.filter((item) => item.user_id === userId),
     identityLinks: data.identityLinks.filter((item) => item.user_id === userId),
     profile: data.profiles.find((item) => item.user_id === userId) || null,
+    opsSummary: adminUserPresenter.buildAdminUserDetailSummary(data, userId),
     orders,
     sessions: sessions.map((session) => toSessionPayload(data, session)),
     records,
@@ -1343,6 +1359,7 @@ function adminDashboard(data, context = {}) {
   const completed = data.checkinSessions.filter((item) => item.status === "COMPLETED").length;
   const pendingRefunds = data.refundWorkItems.filter((item) => item.status === "PENDING").length;
   const matchedOrders = data.youzanOrders.filter((item) => item.user_id).length;
+  const summary = latestDailySummary(data);
   return response({
     metrics: {
       users: data.users.length,
@@ -1352,8 +1369,10 @@ function adminDashboard(data, context = {}) {
       matchedOrders,
       pendingRefunds,
     },
-    summary: latestDailySummary(data),
+    summary,
+    opsDashboard: adminOpsPresenter.buildOpsDashboard(data, summary),
     users: data.users.map(publicUser),
+    opsUsers: adminUserPresenter.buildAdminUserRows(data),
     orders: data.youzanOrders.map((order) => orderFulfillment.toOrderPayload(data, order)),
     sessions: data.checkinSessions.map((session) => toSessionPayload(data, session)),
     operationTasks: operationTask.listOpenOperationTasks(data).map((task) => toOperationTaskPayload(data, task)),
@@ -1450,7 +1469,10 @@ module.exports = {
   listOperationTasks,
   markCouponUsed,
   matchOrder,
+  searchAdminOrderMatching,
   publicUser,
+  previewAdminOrderMatch,
+  confirmAdminOrderMatch,
   previewExternalSamples,
   importExternalSamples,
   upsertExternalStatusMapping,

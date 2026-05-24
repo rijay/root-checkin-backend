@@ -8,134 +8,282 @@
   </head>
   <body>
     <main class="shell">
-      <section class="hero">
-        <div>
+      <header class="app-header">
+        <div class="brand-lockup">
           <img src="/assets/root-logo.png" alt="ROOT" class="logo" />
-          <p class="eyebrow">运营增长后台</p>
-          <h1>7日身体重启计划</h1>
-          <p class="sub">订单匹配、打卡状态、免单审核和用户画像集中管理。</p>
+          <div>
+            <p class="eyebrow">ROOT 运营工作台</p>
+            <h1>小程序运营后台</h1>
+          </div>
         </div>
-        <img src="/assets/root-hero.png" alt="" class="hero-art" />
-      </section>
-
-      <section class="metrics" id="metrics"></section>
-
-      <section class="panel summary-panel">
-        <div class="panel-head">
-          <h2>今日 Summary</h2>
-          <button id="run-audit">生成今日 Summary</button>
+        <div class="header-actions">
+          <span class="env-pill">本地环境</span>
+          <button id="refresh">刷新数据</button>
         </div>
-        <div id="summary" class="summary-grid"></div>
-      </section>
+      </header>
 
-      <section class="panel readiness-panel">
-        <div class="panel-head">
-          <h2>上线闸口</h2>
-          <span class="hint">正式上线前阻塞项</span>
-        </div>
-        <div id="launch-readiness" class="readiness-body"></div>
-      </section>
+      <nav class="tab-nav" aria-label="后台工作区">
+        <button class="tab-button active" data-tab="today">今日运营</button>
+        <button class="tab-button" data-tab="users">用户管理</button>
+        <button class="tab-button" data-tab="orders">订单匹配</button>
+        <button class="tab-button" data-tab="feedback">打卡与反馈</button>
+        <button class="tab-button" data-tab="refund">免单与售后</button>
+        <button class="tab-button" data-tab="dev">开发与发布</button>
+      </nav>
 
-      <section class="panel calibration-panel">
-        <div class="panel-head">
-          <h2>Adapter 校准</h2>
-          <span class="hint">真实账号接入前检查</span>
-        </div>
-        <div id="adapter-calibration" class="calibration-body"></div>
-      </section>
-
-      <section class="panel release-panel">
-        <div class="panel-head">
-          <h2>发布记录</h2>
-          <span class="hint">上线决策和回滚凭证</span>
-        </div>
-        <div id="release-record" class="release-body"></div>
-      </section>
-
-      <section class="panel import-panel">
-        <div class="panel-head">
-          <h2>真实样本导入</h2>
-          <select id="sample-source" aria-label="样本来源">
-            <option value="YOUZAN_ORDER">有赞订单</option>
-            <option value="FULFILLMENT">物流状态</option>
-            <option value="WECHAT_LEAD">企业微信线索</option>
-          </select>
-        </div>
-        <div class="sample-grid">
-          <textarea id="sample-input" spellcheck="false" aria-label="样本内容"></textarea>
-          <div class="sample-side">
-            <div class="sample-actions">
-              <button id="preview-samples">预览校验</button>
-              <button id="import-samples" class="ghost">导入样本</button>
-              <button id="insert-sample-template" class="ghost">填入模板</button>
+      <section class="tab-panel active" data-panel="today">
+        <section class="ops-metrics" id="ops-metrics"></section>
+        <section class="panel summary-panel">
+          <div class="panel-head">
+            <div>
+              <h2>今日 Summary</h2>
+              <span class="hint">生成并刷新今日待办</span>
             </div>
-            <div id="sample-template" class="sample-template"></div>
-            <div id="sample-result" class="sample-result">
-              <div class="meta">粘贴 JSON、CSV 或表格文本后先预览校验，再导入可识别样本。</div>
+            <button id="run-audit">生成今日 Summary</button>
+          </div>
+          <div id="summary" class="summary-grid"></div>
+        </section>
+        <section class="ops-grid">
+          <div class="panel ops-main">
+            <div class="panel-head">
+              <h2>高优先级待办</h2>
+              <span class="hint">按运营优先级排序</span>
+            </div>
+            <div id="priority-tasks" class="table"></div>
+          </div>
+          <div class="ops-side">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>订单匹配提醒</h2>
+                <button class="ghost tab-link" data-target-tab="orders">去匹配</button>
+              </div>
+              <div id="pending-orders-preview" class="table compact"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <h2>免单待审</h2>
+                <button class="ghost tab-link" data-target-tab="refund">去审核</button>
+              </div>
+              <div id="refund-preview" class="table compact"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <h2>异常反馈</h2>
+                <button class="ghost tab-link" data-target-tab="feedback">去处理</button>
+              </div>
+              <div id="risk-feedback-preview" class="table compact"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <h2>已送达待开始</h2>
+                <button class="ghost tab-link" data-target-tab="users">看用户</button>
+              </div>
+              <div id="ready-users-preview" class="table compact"></div>
             </div>
           </div>
-        </div>
-        <div class="sample-ledger">
-          <h3>Adapter 准入</h3>
-          <div id="external-adapter-readiness" class="adapter-readiness-list">
-            <div class="meta">暂无准入结果。</div>
-          </div>
-          <h3>真实 Adapter 接入</h3>
-          <div id="external-adapters" class="external-adapter-list">
-            <div class="meta">暂无 Adapter 状态。</div>
-          </div>
-          <h3>取样评审台账</h3>
-          <div id="sample-reviews" class="sample-review-list">
-            <div class="meta">暂无取样记录。</div>
-          </div>
-        </div>
+        </section>
       </section>
 
-      <section class="workspace">
-        <div class="panel">
-          <div class="panel-head">
-            <h2>用户状态</h2>
-            <button id="refresh">刷新</button>
+      <section class="tab-panel" data-panel="users" hidden>
+        <section class="workspace">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>用户管理</h2>
+              <span class="hint">搜索、查看详情、发起跟进</span>
+            </div>
+            <div class="user-toolbar">
+              <input id="user-search" type="search" placeholder="搜索昵称、手机号、卡点或订单号" aria-label="用户搜索" />
+              <select id="user-filter" aria-label="用户筛选">
+                <option value="">全部用户</option>
+                <option value="needs_action">需要处理</option>
+                <option value="ready_to_start">已送达未开始</option>
+                <option value="waiting_delivery">等待物流</option>
+                <option value="active">打卡中</option>
+                <option value="completed">已完成</option>
+              </select>
+            </div>
+            <div id="users" class="table"></div>
           </div>
-          <div id="users" class="table"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head">
-            <h2>免单审核</h2>
+          <div class="panel detail-panel">
+            <div class="panel-head">
+              <h2>用户详情</h2>
+              <span class="hint">从用户、待办或已送达列表打开</span>
+            </div>
+            <div id="user-detail" class="detail-body">
+              <div class="row"><div class="meta">暂未选择用户。</div></div>
+            </div>
           </div>
-          <div id="refunds" class="table"></div>
-        </div>
-        <div class="panel">
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="orders" hidden>
+        <section class="panel">
           <div class="panel-head">
-            <h2>运营待办</h2>
-            <select id="task-filter" aria-label="待办类型筛选">
-              <option value="">全部类型</option>
+            <div>
+              <h2>订单匹配</h2>
+              <span class="hint">搜索订单和用户，预览风险后确认写入</span>
+            </div>
+            <button class="ghost" id="toggle-bulk-orders" type="button">批量粘贴订单</button>
+          </div>
+          <div class="order-searchbar">
+            <input id="order-match-search" type="search" placeholder="输入订单号、手机号、收货人或昵称" aria-label="订单匹配搜索" />
+            <button id="search-order-matching">搜索候选</button>
+            <button class="ghost" id="clear-order-matching">清空选择</button>
+          </div>
+          <div id="match-result" class="match-result"></div>
+          <div id="bulk-order-panel" class="bulk-paste-panel" hidden>
+            <div class="bulk-paste-copy">
+              <h3>批量粘贴订单</h3>
+              <p>从有赞订单表复制 CSV/表格文本。预览只校验，不写入；确认写入后订单会进入待匹配列表。</p>
+            </div>
+            <textarea id="bulk-order-input" class="bulk-order-input" spellcheck="false" aria-label="批量订单内容"></textarea>
+            <div class="bulk-actions">
+              <button id="preview-bulk-orders" type="button">预览订单</button>
+              <button id="import-bulk-orders" class="ghost" type="button">确认写入</button>
+              <button id="insert-bulk-order-template" class="ghost" type="button">填入表头</button>
+            </div>
+            <div id="bulk-order-result" class="bulk-order-result">
+              <div class="meta">可粘贴：有赞订单号、收货人、收货手机号、商品名称、实付金额、订单状态、物流状态、收货地址。</div>
+            </div>
+          </div>
+          <div class="order-workbench" id="order-workbench">
+            <div class="order-column">
+              <h3>订单搜索与录入</h3>
+              <div class="manual-order-form">
+                <input id="manual-order-no" type="text" placeholder="有赞订单号" aria-label="有赞订单号" />
+                <input id="manual-order-phone" type="tel" placeholder="收货手机号" aria-label="收货手机号" />
+                <input id="manual-order-name" type="text" placeholder="收货人" aria-label="收货人" />
+                <input id="manual-order-product" type="text" placeholder="商品名称" aria-label="商品名称" value="ROOT 7日试饮装" />
+                <input id="manual-order-amount" type="number" placeholder="实付金额" aria-label="实付金额" value="199" />
+                <select id="manual-order-status" aria-label="订单状态">
+                  <option value="PAID">已支付</option>
+                  <option value="CLOSED">已关闭</option>
+                  <option value="REFUNDED">已退款</option>
+                </select>
+                <select id="manual-delivery-status" aria-label="物流状态">
+                  <option value="NOT_SHIPPED">未发货</option>
+                  <option value="SHIPPED">已发货</option>
+                  <option value="DELIVERED">已签收</option>
+                  <option value="EXCEPTION">物流异常</option>
+                </select>
+                <input id="manual-order-address" type="text" placeholder="收货地址或备注" aria-label="收货地址或备注" />
+                <button id="sync-order" type="button">录入/更新订单</button>
+              </div>
+              <div id="order-sync-result" class="inline-result"></div>
+              <div id="pending-orders" class="table compact"></div>
+            </div>
+            <div class="order-column">
+              <h3>用户搜索与详情</h3>
+              <div id="user-candidates" class="table compact"></div>
+            </div>
+            <div class="order-column">
+              <h3>匹配预览</h3>
+              <div id="match-preview" class="match-preview">
+                <div class="empty-box">选择订单和用户后展示风险与确认动作。</div>
+              </div>
+              <label class="check-row">
+                <input id="confirm-risks" type="checkbox" />
+                <span>我已核对风险提示</span>
+              </label>
+              <label class="check-row">
+                <input id="confirm-rebind" type="checkbox" />
+                <span>确认改绑订单</span>
+              </label>
+              <textarea id="match-note" class="match-note" placeholder="改绑或异常匹配备注"></textarea>
+              <button id="confirm-match" type="button">确认匹配</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="feedback" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>打卡与反馈</h2>
+            <span class="hint">今日打卡、异常反馈和问卷跟进</span>
+          </div>
+          <div id="risk-feedbacks" class="table"></div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="refund" hidden>
+        <section class="workspace">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>免单审核</h2>
+              <span class="hint">审核前查看资格依据</span>
+            </div>
+            <div id="refunds" class="table"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>优惠券转化</h2>
+            </div>
+            <div id="coupons" class="table"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="dev" hidden>
+        <section class="panel readiness-panel">
+          <div class="panel-head">
+            <h2>上线闸口</h2>
+            <span class="hint">正式上线前阻塞项</span>
+          </div>
+          <div id="launch-readiness" class="readiness-body"></div>
+        </section>
+        <section class="panel calibration-panel">
+          <div class="panel-head">
+            <h2>Adapter 校准</h2>
+            <span class="hint">真实账号接入前检查</span>
+          </div>
+          <div id="adapter-calibration" class="calibration-body"></div>
+        </section>
+        <section class="panel release-panel">
+          <div class="panel-head">
+            <h2>发布记录</h2>
+            <span class="hint">上线决策和回滚凭证</span>
+          </div>
+          <div id="release-record" class="release-body"></div>
+        </section>
+        <section class="panel import-panel">
+          <div class="panel-head">
+            <h2>真实样本导入</h2>
+            <select id="sample-source" aria-label="样本来源">
+              <option value="YOUZAN_ORDER">有赞订单</option>
+              <option value="FULFILLMENT">物流状态</option>
+              <option value="WECHAT_LEAD">企业微信线索</option>
             </select>
           </div>
-          <div id="tasks" class="table"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head">
-            <h2>已送达待开始</h2>
+          <div class="sample-grid">
+            <textarea id="sample-input" spellcheck="false" aria-label="样本内容"></textarea>
+            <div class="sample-side">
+              <div class="sample-actions">
+                <button id="preview-samples">预览校验</button>
+                <button id="import-samples" class="ghost">导入样本</button>
+                <button id="insert-sample-template" class="ghost">填入模板</button>
+              </div>
+              <div id="sample-template" class="sample-template"></div>
+              <div id="sample-result" class="sample-result">
+                <div class="meta">粘贴 JSON、CSV 或表格文本后先预览校验，再导入可识别样本。</div>
+              </div>
+            </div>
           </div>
-          <div id="ready-users" class="table"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head">
-            <h2>优惠券转化</h2>
+          <div class="sample-ledger">
+            <h3>Adapter 准入</h3>
+            <div id="external-adapter-readiness" class="adapter-readiness-list">
+              <div class="meta">暂无准入结果。</div>
+            </div>
+            <h3>真实 Adapter 接入</h3>
+            <div id="external-adapters" class="external-adapter-list">
+              <div class="meta">暂无 Adapter 状态。</div>
+            </div>
+            <h3>取样评审台账</h3>
+            <div id="sample-reviews" class="sample-review-list">
+              <div class="meta">暂无取样记录。</div>
+            </div>
           </div>
-          <div id="coupons" class="table"></div>
-        </div>
-      </section>
-
-      <section class="panel detail-panel">
-        <div class="panel-head">
-          <h2>用户详情</h2>
-          <span class="hint">从用户、待办或已送达列表打开</span>
-        </div>
-        <div id="user-detail" class="detail-body">
-          <div class="row"><div class="meta">暂未选择用户。</div></div>
-        </div>
+        </section>
       </section>
     </main>
     <script src="/admin.js"></script>
