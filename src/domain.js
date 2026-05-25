@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const https = require("node:https");
 const { addDays, daysBetween, nowISO, todayISO } = require("./dates");
 const adapterCalibration = require("./adapterCalibration");
 const adminOrderMatching = require("./adminOrderMatching");
@@ -178,11 +179,57 @@ function businessError(code, message, status = 200) {
   return error;
 }
 
+function requestWechatJson(url, options = {}) {
+  const target = url instanceof URL ? url : new URL(url);
+  return new Promise((resolve, reject) => {
+    const request = https.request(target, {
+      method: options.method || "GET",
+      headers: options.headers || {},
+      family: 4,
+      timeout: 8000,
+    }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => {
+        try {
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            payload: body ? JSON.parse(body) : {},
+          });
+        } catch (error) {
+          reject(new Error("WECHAT_RESPONSE_PARSE_FAILED"));
+        }
+      });
+    });
+    request.on("timeout", () => {
+      request.destroy(new Error("WECHAT_REQUEST_TIMEOUT"));
+    });
+    request.on("error", reject);
+    if (options.body) request.write(options.body);
+    request.end();
+  });
+}
+
 async function fetchWechatJson(url, options) {
-  const response = await fetch(url, options);
-  const payload = await response.json();
-  if (!response.ok || payload.errcode) {
-    const message = payload.errmsg || `微信接口请求失败：${response.status}`;
+  let result;
+  try {
+    result = await requestWechatJson(url, options);
+  } catch (error) {
+    const target = url instanceof URL ? url : new URL(url);
+    console.error("[wechat] request failed", {
+      host: target.host,
+      path: target.pathname,
+      error: error && (error.code || error.message || String(error)),
+    });
+    throw businessError(1006, "微信登录服务暂时不可用，请稍后重试");
+  }
+  const payload = result.payload;
+  if (!result.ok || payload.errcode) {
+    const message = payload.errmsg || `微信接口请求失败：${result.status}`;
     throw businessError(1006, message);
   }
   return payload;
