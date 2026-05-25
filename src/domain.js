@@ -140,13 +140,32 @@ function publicUser(user) {
     userId: user.user_id,
     phone: maskPhone(user.phone),
     state: user.state,
-    nickname: user.nickname || "ROOT用户",
+    nickname: user.nickname || "ROOT体验官",
     avatarUrl: user.avatar_url || "",
     totalCheckinDays: user.total_checkin_days || 0,
     currentStreak: user.current_streak || 0,
     longestStreak: user.longest_streak || 0,
     lastCheckinDate: user.last_checkin_date || "",
   };
+}
+
+function normalizeNickname(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "微信用户") return "";
+  return text.slice(0, 24);
+}
+
+function normalizeAvatarUrl(value) {
+  const text = String(value || "").trim();
+  if (!/^https?:\/\//i.test(text)) return "";
+  return text;
+}
+
+function applyUserDisplayProfile(user, body = {}) {
+  const nickname = normalizeNickname(body.nickname || body.nickName);
+  const avatarUrl = normalizeAvatarUrl(body.avatarUrl || body.avatar_url);
+  if (nickname) user.nickname = nickname;
+  if (avatarUrl) user.avatar_url = avatarUrl;
 }
 
 function issueToken(data, userId) {
@@ -382,8 +401,8 @@ function loginByPhone(data, body, phone) {
       openid: body.openid || "",
       unionid: body.unionid || "",
       phone,
-      nickname: body.nickname || "ROOT体验官",
-      avatar_url: "",
+      nickname: normalizeNickname(body.nickname || body.nickName) || "ROOT体验官",
+      avatar_url: normalizeAvatarUrl(body.avatarUrl || body.avatar_url),
       state: STATES.UNREGISTERED,
       created_at: nowISO(),
       registered_at: "",
@@ -398,6 +417,7 @@ function loginByPhone(data, body, phone) {
   } else {
     if (body.openid && !user.openid) user.openid = body.openid;
     if (body.unionid && !user.unionid) user.unionid = body.unionid;
+    applyUserDisplayProfile(user, body);
   }
 
   const token = issueToken(data, user.user_id);

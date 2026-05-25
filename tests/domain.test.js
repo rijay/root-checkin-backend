@@ -1057,3 +1057,27 @@ test("production phone login requires WeChat server credentials", async () => {
     /服务端未配置微信登录密钥/
   );
 });
+
+test("phone login stores optional WeChat display profile", () => {
+  const store = domain.createStore();
+  const first = domain.login(store, {
+    phone: "13800000001",
+    nickname: "Root小路",
+    avatarUrl: "https://thirdwx.qlogo.cn/avatar.png",
+  }).data.user;
+
+  assert.equal(first.nickname, "Root小路");
+  assert.equal(first.avatarUrl, "https://thirdwx.qlogo.cn/avatar.png");
+
+  const fallback = domain.login(store, { phone: "13800000002", nickname: "微信用户", avatarUrl: "file://local" }).data.user;
+  assert.equal(fallback.nickname, "ROOT体验官");
+  assert.equal(fallback.avatarUrl, "");
+
+  const updated = domain.login(store, {
+    phone: "13800000001",
+    nickname: "Root体验同学",
+    avatarUrl: "https://thirdwx.qlogo.cn/new-avatar.png",
+  }).data.user;
+  assert.equal(updated.nickname, "Root体验同学");
+  assert.equal(updated.avatarUrl, "https://thirdwx.qlogo.cn/new-avatar.png");
+});
