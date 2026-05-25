@@ -1,4 +1,6 @@
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const http = require("node:http");
 const https = require("node:https");
 const { addDays, daysBetween, nowISO, todayISO } = require("./dates");
 const adapterCalibration = require("./adapterCalibration");
@@ -27,6 +29,8 @@ const STATES = {
   CHECKIN_FAILED: "CHECKIN_FAILED",
   DAILY_USER: "DAILY_USER",
 };
+
+const CLOUDBASE_ACCESS_TOKEN_FILE = "/.tencentcloudbase/wx/cloudbase_access_token";
 
 const ROUTES_BY_STATE = {
   GUEST: "/pages/home/index",
@@ -179,10 +183,11 @@ function businessError(code, message, status = 200) {
   return error;
 }
 
-function requestWechatJson(url, options = {}) {
+function requestJson(url, options = {}) {
   const target = url instanceof URL ? url : new URL(url);
+  const transport = target.protocol === "http:" ? http : https;
   return new Promise((resolve, reject) => {
-    const request = https.request(target, {
+    const request = transport.request(target, {
       method: options.method || "GET",
       headers: options.headers || {},
       family: 4,
@@ -214,15 +219,47 @@ function requestWechatJson(url, options = {}) {
   });
 }
 
+function sanitizeWechatErrorUrl(url) {
+  const target = url instanceof URL ? url : new URL(url);
+  return { host: target.host, path: target.pathname, protocol: target.protocol };
+}
+
+function readCloudbaseAccessToken() {
+  try {
+    if (!fs.existsSync(CLOUDBASE_ACCESS_TOKEN_FILE)) return "";
+    return fs.readFileSync(CLOUDBASE_ACCESS_TOKEN_FILE, "utf8").trim();
+  } catch (error) {
+    return "";
+  }
+}
+
+function getHeader(headers = {}, name) {
+  const lowerName = name.toLowerCase();
+  const value = headers[name] || headers[lowerName];
+  return Array.isArray(value) ? value[0] : value || "";
+}
+
+function normalizeWechatContext(context) {
+  if (context && context.env) {
+    return {
+      env: context.env,
+      headers: context.headers || {},
+    };
+  }
+  return { env: context || process.env, headers: {} };
+}
+
+function shouldUseCloudbaseOpenApi(headers = {}) {
+  return Boolean(getHeader(headers, "x-wx-openid"));
+}
+
 async function fetchWechatJson(url, options) {
   let result;
   try {
-    result = await requestWechatJson(url, options);
+    result = await requestJson(url, options);
   } catch (error) {
-    const target = url instanceof URL ? url : new URL(url);
     console.error("[wechat] request failed", {
-      host: target.host,
-      path: target.pathname,
+      ...sanitizeWechatErrorUrl(url),
       error: error && (error.code || error.message || String(error)),
     });
     throw businessError(1006, "微信登录服务暂时不可用，请稍后重试");
@@ -233,6 +270,13 @@ async function fetchWechatJson(url, options) {
     throw businessError(1006, message);
   }
   return payload;
+}
+
+async function fetchCloudbaseWechatJson(pathname, options, env = process.env) {
+  const url = new URL(pathname, env.ROOT_WECHAT_OPENAPI_BASE_URL || "http://api.weixin.qq.com");
+  const cloudbaseAccessToken = readCloudbaseAccessToken();
+  if (cloudbaseAccessToken) url.searchParams.set("cloudbase_access_token", cloudbaseAccessToken);
+  return fetchWechatJson(url, options);
 }
 
 async function getWechatAccessToken(data, config) {
@@ -260,6 +304,16 @@ async function getWechatPhoneNumber(data, config, phoneCode) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code: phoneCode }),
   });
+  const phoneInfo = payload.phone_info || {};
+  return normalizePhone(phoneInfo.phoneNumber || phoneInfo.purePhoneNumber);
+}
+
+async function getCloudbaseWechatPhoneNumber(phoneCode, env) {
+  const payload = await fetchCloudbaseWechatJson("/wxa/business/getuserphonenumber", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: phoneCode }),
+  }, env);
   const phoneInfo = payload.phone_info || {};
   return normalizePhone(phoneInfo.phoneNumber || phoneInfo.purePhoneNumber);
 }
@@ -355,11 +409,22 @@ function login(data, body = {}) {
   return loginByPhone(data, body, phone);
 }
 
-async function loginWithWechat(data, body = {}, env = process.env) {
+async function loginWithWechat(data, body = {}, context = process.env) {
+  const runtime = normalizeWechatContext(context);
+  const env = runtime.env;
   const shouldUseWechatPhone = !body.phone && body.phoneCode;
   if (!shouldUseWechatPhone) {
     if (!isDirectPhoneLoginAllowed(env)) throw businessError(1007, "请使用微信手机号授权登录");
     return login(data, body);
+  }
+
+  if (shouldUseCloudbaseOpenApi(runtime.headers)) {
+    const phone = await getCloudbaseWechatPhoneNumber(body.phoneCode, env);
+    return loginByPhone(data, {
+      ...body,
+      openid: getHeader(runtime.headers, "x-wx-openid"),
+      unionid: getHeader(runtime.headers, "x-wx-unionid"),
+    }, phone);
   }
 
   const config = getWechatConfig(env);

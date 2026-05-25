@@ -156,7 +156,12 @@ function createApp(options = {}) {
       const body = ["POST", "PUT", "PATCH"].includes(method) ? await readBody(req) : {};
       const route = `${method} ${url.pathname}`;
 
-      if (route === "POST /api/v1/auth/login") return ok(res, await withIdempotency(data, req, () => loginWithWechat(data, body, runtimeContext.env)));
+      if (route === "POST /api/v1/auth/login") {
+        return ok(res, await withIdempotency(data, req, () => loginWithWechat(data, body, {
+          env: runtimeContext.env,
+          headers: req.headers,
+        })));
+      }
       if (route === "GET /api/v1/user/state") return ok(res, getUserState(data, token));
       if (route === "GET /api/v1/user/profile") return ok(res, getProfile(data, token));
       if (route === "GET /api/v1/user/orders") return ok(res, getUserOrders(data, token));
