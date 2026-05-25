@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -133,6 +134,43 @@ test("serves the REST API and admin dashboard data", async (t) => {
   });
   assert.equal(follow.code, 0);
   assert.equal(follow.data.task.taskType, "FEEDBACK_FOLLOW");
+});
+
+test("cloud container login uses WeChat cloud open Interface", async (t) => {
+  let requestedPath = "";
+  let requestedBody = "";
+  const wechatServer = http.createServer((req, res) => {
+    requestedPath = req.url;
+    req.on("data", (chunk) => {
+      requestedBody += chunk;
+    });
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        phone_info: {
+          phoneNumber: "13800000009",
+          purePhoneNumber: "13800000009",
+        },
+      }));
+    });
+  });
+  const wechatBaseUrl = await listen(wechatServer);
+  t.after(() => wechatServer.close());
+
+  const server = createApp({ env: { ROOT_WECHAT_OPENAPI_BASE_URL: wechatBaseUrl } });
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+
+  const login = await request(baseUrl, "/api/v1/auth/login", {
+    method: "POST",
+    headers: { "x-wx-openid": "cloud_openid", "x-wx-unionid": "cloud_unionid" },
+    body: JSON.stringify({ phoneCode: "phone_code" }),
+  });
+
+  assert.equal(login.code, 0);
+  assert.equal(login.data.user.phone, "138****0009");
+  assert.equal(requestedPath, "/wxa/business/getuserphonenumber");
+  assert.deepEqual(JSON.parse(requestedBody), { code: "phone_code" });
 });
 
 test("HTTP login rejects direct phone payload when direct phone login is not enabled", async (t) => {
