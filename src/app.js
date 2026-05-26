@@ -51,6 +51,7 @@ const {
   submitProfile,
   submitQuestionnaire,
   trackEvent,
+  updateDisplayProfile,
   updateOrderFulfillment,
   upsertExternalStatusMapping,
   uploadImage,
@@ -166,6 +167,7 @@ function createApp(options = {}) {
       if (route === "GET /api/v1/user/profile") return ok(res, getProfile(data, token));
       if (route === "GET /api/v1/user/orders") return ok(res, getUserOrders(data, token));
       if (route === "POST /api/v1/user/profile") return ok(res, withIdempotency(data, req, () => submitProfile(data, token, body)));
+      if (route === "POST /api/v1/user/display-profile") return ok(res, withIdempotency(data, req, () => updateDisplayProfile(data, token, body)));
       if (route === "POST /api/v1/order/match") return ok(res, withIdempotency(data, req, () => matchOrder(data, token, body)));
       if (route === "POST /api/v1/checkin/start") return ok(res, withIdempotency(data, req, () => startCheckin(data, token, body)));
       if (route === "GET /api/v1/checkin/session") return ok(res, getSession(data, token));

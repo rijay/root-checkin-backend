@@ -63,6 +63,17 @@ test("serves the REST API and admin dashboard data", async (t) => {
   assert.equal(login.code, 0);
   assert.equal(login.data.user.state, "UNREGISTERED");
 
+  const displayProfile = await request(baseUrl, "/api/v1/user/display-profile", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      nickname: "Root体验同学",
+      avatarUrl: "cloud://prod-d3grtjkva76c93e00.avatars/avatar.jpg",
+    }),
+  });
+  assert.equal(displayProfile.data.user.nickname, "Root体验同学");
+  assert.equal(displayProfile.data.user.avatarUrl, "cloud://prod-d3grtjkva76c93e00.avatars/avatar.jpg");
+
   const profile = await request(baseUrl, "/api/v1/user/profile", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },

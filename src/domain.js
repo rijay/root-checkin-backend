@@ -157,7 +157,7 @@ function normalizeNickname(value) {
 
 function normalizeAvatarUrl(value) {
   const text = String(value || "").trim();
-  if (!/^https?:\/\//i.test(text)) return "";
+  if (!/^(https?:\/\/|cloud:\/\/)/i.test(text)) return "";
   return text;
 }
 
@@ -427,6 +427,16 @@ function loginByPhone(data, body, phone) {
 function login(data, body = {}) {
   const phone = normalizePhone(body.phone);
   return loginByPhone(data, body, phone);
+}
+
+function updateDisplayProfile(data, token, body = {}) {
+  const user = requireUser(data, token);
+  const nickname = normalizeNickname(body.nickname || body.nickName);
+  const avatarUrl = normalizeAvatarUrl(body.avatarUrl || body.avatar_url);
+  if (!nickname && !avatarUrl) throw businessError(2002, "请填写昵称或选择头像");
+  if (nickname) user.nickname = nickname;
+  if (avatarUrl) user.avatar_url = avatarUrl;
+  return response({ success: true, user: publicUser(user) });
 }
 
 async function loginWithWechat(data, body = {}, context = process.env) {
@@ -1621,6 +1631,7 @@ module.exports = {
   runExternalAdapter,
   trackEvent,
   toSessionPayload,
+  updateDisplayProfile,
   updateOrderFulfillment,
   uploadImage,
 };
