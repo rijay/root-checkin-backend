@@ -1081,3 +1081,20 @@ test("phone login stores optional WeChat display profile", () => {
   assert.equal(updated.nickname, "Root体验同学");
   assert.equal(updated.avatarUrl, "https://thirdwx.qlogo.cn/new-avatar.png");
 });
+
+test("user can update display profile after phone login", () => {
+  const store = domain.createStore();
+  const login = domain.login(store, { phone: "13800000001" }).data;
+
+  const updated = domain.updateDisplayProfile(store, login.token, {
+    nickname: "Root记录官",
+    avatarUrl: "cloud://prod-d3grtjkva76c93e00.avatars/root-avatar.jpg",
+  }).data.user;
+
+  assert.equal(updated.nickname, "Root记录官");
+  assert.equal(updated.avatarUrl, "cloud://prod-d3grtjkva76c93e00.avatars/root-avatar.jpg");
+  assert.throws(
+    () => domain.updateDisplayProfile(store, login.token, { nickname: "微信用户", avatarUrl: "file://tmp/avatar.jpg" }),
+    /请填写昵称或选择头像/
+  );
+});
