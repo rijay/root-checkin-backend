@@ -29,6 +29,14 @@ let selectedUserId = "";
 let currentMatchPreview = null;
 let currentUserKeyword = "";
 let currentUserFilter = "";
+let currentBulkOrderBatchId = "";
+let currentFulfillmentBatchId = "";
+let currentConflictFilter = "";
+let currentBatchSourceFilter = "";
+let currentAuditKeyword = "";
+let currentAuditAction = "";
+
+const ADMIN_TOKEN_KEY = "ROOT_ADMIN_TOKEN";
 
 const sampleExamples = {
   YOUZAN_ORDER: [
@@ -66,12 +74,40 @@ const sampleExamples = {
   ],
 };
 
-async function api(path, options = {}) {
+function getAdminToken() {
+  return window.localStorage.getItem(ADMIN_TOKEN_KEY) || "";
+}
+
+function setAdminToken(token) {
+  if (token) {
+    window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
+  } else {
+    window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+  }
+}
+
+function promptAdminToken() {
+  const token = window.prompt("请输入后台访问口令");
+  if (token === null) return "";
+  setAdminToken(token.trim());
+  return getAdminToken();
+}
+
+async function api(path, options = {}, retryAuth = true) {
+  const adminToken = getAdminToken();
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(adminToken ? { "X-Admin-Token": adminToken, "X-ROOT-ADMIN-TOKEN": adminToken } : {}),
+      ...(options.headers || {}),
+    },
   });
   const payload = await response.json();
+  if ((response.status === 401 || payload.code === 40101) && retryAuth) {
+    setAdminToken("");
+    if (promptAdminToken()) return api(path, options, false);
+  }
   if (payload.code !== 0) throw new Error(payload.message);
   return payload.data;
 }
@@ -147,6 +183,20 @@ function renderSummary(summary = {}) {
   setHtml("#summary", Object.entries(summaryLabels)
     .map(([key, label]) => `<article class="summary-item"><strong>${summary[key] || 0}</strong><span>${label}</span></article>`)
     .join("") + `<div class="summary-date">日期：${escapeHtml(summary.date ? formatDateCn(summary.date, summary.date) : "今日")} · 生成待办：${summary.generatedTasks || 0}</div>`);
+}
+
+function renderDailyOpsSummary(summary = {}) {
+  const items = [
+    ["今日订单导入", summary.importedOrders || 0],
+    ["今日物流导入", summary.importedFulfillments || 0],
+    ["今日送达", summary.deliveredToday || 0],
+    ["今日自动匹配", summary.autoMatchedToday || 0],
+    ["今日人工处理", summary.manualHandledToday || 0],
+    ["未处理冲突", summary.openConflicts || 0],
+    ["已送达待开始", summary.readyToStart || 0],
+    ["导入批次", summary.importBatchCount || 0],
+  ];
+  setHtml("#daily-ops-summary", items.map(([label, value]) => `<article class="daily-ops-item"><span>${escapeHtml(label)}</span><strong>${value}</strong></article>`).join(""));
 }
 
 function renderOpsMetric(metric) {
@@ -412,24 +462,45 @@ function bulkOrderTemplate() {
     : "有赞订单号,收货人,收货手机号,商品名称,商品ID,实付金额,订单状态,物流状态,支付时间,收货地址";
 }
 
+function fulfillmentTemplate() {
+  const template = sampleTemplateForSource("FULFILLMENT");
+  return template
+    ? template.csvHeader
+    : "快递公司,获取时间,电子面单号,订单号,运输状态,收件人姓名,收件人联系方式";
+}
+
 function readBulkOrderPayload() {
   const text = document.querySelector("#bulk-order-input").value.trim();
   if (!text) throw new Error("请先粘贴有赞订单表格内容");
   return { sourceType: "YOUZAN_ORDER", text };
 }
 
-function renderBulkOrderResult(result = {}, mode = "preview") {
-  const rows = result.rows || [];
+function readFulfillmentPayload() {
+  const text = document.querySelector("#fulfillment-input").value.trim();
+  if (!text) throw new Error("请先粘贴物流状态表格内容");
+  return { sourceType: "FULFILLMENT", text };
+}
+
+function renderBulkOrderResult(result = {}, mode = "preview", selector = "#bulk-order-result") {
+  const importResult = result.preview || result.result || result;
+  const rows = importResult.rows || [];
+  const batchLine = result.batchId
+    ? `<div class="meta">导入批次：${escapeHtml(result.batchId)} · hash ${escapeHtml(String(result.contentHash || "").slice(0, 12))}</div>`
+    : "";
   const summary = `<div class="bulk-summary">
-    <span>总行数 ${result.total || 0}</span>
-    <span>可写入 ${result.importableCount || 0}</span>
-    <span>已写入 ${result.importedCount || 0}</span>
-    <span>错误 ${result.errorCount || 0}</span>
-    <span>提醒 ${result.warningCount || 0}</span>
+    <span>总行数 ${importResult.total || 0}</span>
+    <span>可写入 ${importResult.importableCount || 0}</span>
+    <span>已写入 ${importResult.importedCount || 0}</span>
+    <span>错误 ${importResult.errorCount || 0}</span>
+    <span>提醒 ${importResult.warningCount || 0}</span>
   </div>`;
   const rowsHtml = rows.length
     ? rows.map((row) => {
         const mapped = row.mapped || {};
+        const orderText = mapped.youzanOrderNo || mapped.orderId || "无订单号";
+        const personText = firstValue(mapped.receiverName, mapped.carrier, mapped.lastEventText, "无姓名/节点");
+        const phoneOrTrackingText = firstValue(maskPhone(mapped.receiverPhone || ""), mapped.trackingNo, "-");
+        const statusText = mapped.deliveryStatus || mapped.orderStatus || "-";
         const label = row.errors && row.errors.length
           ? "不可写入"
           : mode === "import" && row.imported
@@ -444,14 +515,14 @@ function renderBulkOrderResult(result = {}, mode = "preview") {
         return `<div class="bulk-row">
           <div class="bulk-row-head">
             <strong>#${row.index} · ${escapeHtml(label)}</strong>
-            <span>${escapeHtml(mapped.deliveryStatus || "-")}</span>
+            <span>${escapeHtml(statusText)}</span>
           </div>
-          <div class="meta">${escapeHtml(mapped.youzanOrderNo || "无订单号")} · ${escapeHtml(mapped.receiverName || "未知收货人")} · ${escapeHtml(maskPhone(mapped.receiverPhone || ""))}</div>
+          <div class="meta">${escapeHtml(orderText)} · ${escapeHtml(personText)} · ${escapeHtml(phoneOrTrackingText)}</div>
           ${messages.length ? `<div class="${row.errors && row.errors.length ? "sample-error" : "sample-warning"}">${escapeHtml(messages.join("；"))}</div>` : ""}
         </div>`;
       }).join("")
-    : `<div class="meta">暂无订单行。</div>`;
-  setHtml("#bulk-order-result", summary + rowsHtml);
+    : `<div class="meta">暂无数据行。</div>`;
+  setHtml(selector, batchLine + summary + rowsHtml);
 }
 
 function toggleBulkOrderPanel() {
@@ -465,10 +536,20 @@ function toggleBulkOrderPanel() {
 
 function insertBulkOrderTemplate() {
   document.querySelector("#bulk-order-input").value = bulkOrderTemplate();
+  currentBulkOrderBatchId = "";
   const fileInput = document.querySelector("#bulk-order-file");
   if (fileInput) fileInput.value = "";
   setHtml("#bulk-file-status", `<span class="meta">已填入后台模板表头；也可直接上传有赞原始 CSV。</span>`);
   setHtml("#bulk-order-result", `<div class="meta">已填入表头，请从有赞订单表复制真实行后再预览。</div>`);
+}
+
+function insertFulfillmentTemplate() {
+  document.querySelector("#fulfillment-input").value = fulfillmentTemplate();
+  currentFulfillmentBatchId = "";
+  const fileInput = document.querySelector("#fulfillment-file");
+  if (fileInput) fileInput.value = "";
+  setHtml("#fulfillment-file-status", `<span class="meta">已填入物流模板表头；也可直接上传物流状态原始 CSV。</span>`);
+  setHtml("#fulfillment-result", `<div class="meta">已填入表头，请从物流状态表复制真实行后再预览。</div>`);
 }
 
 function readTextFile(file) {
@@ -488,6 +569,7 @@ async function loadBulkOrderCsvFile(event) {
     const text = await readTextFile(file);
     if (!text.trim()) throw new Error("CSV 文件内容为空");
     document.querySelector("#bulk-order-input").value = text;
+    currentBulkOrderBatchId = "";
     const rowCount = Math.max(0, text.split(/\r?\n/).filter((line) => line.trim()).length - 1);
     setHtml("#bulk-file-status", `<span class="meta">已读取 ${escapeHtml(file.name)}，共 ${rowCount} 行订单，正在预览校验。</span>`);
     await previewBulkOrders();
@@ -497,29 +579,80 @@ async function loadBulkOrderCsvFile(event) {
   }
 }
 
+async function loadFulfillmentCsvFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  try {
+    const text = await readTextFile(file);
+    if (!text.trim()) throw new Error("CSV 文件内容为空");
+    document.querySelector("#fulfillment-input").value = text;
+    currentFulfillmentBatchId = "";
+    const rowCount = Math.max(0, text.split(/\r?\n/).filter((line) => line.trim()).length - 1);
+    setHtml("#fulfillment-file-status", `<span class="meta">已读取 ${escapeHtml(file.name)}，共 ${rowCount} 行物流，正在预览校验。</span>`);
+    await previewFulfillment();
+  } catch (error) {
+    setHtml("#fulfillment-file-status", `<span class="sample-error">${escapeHtml(error.message)}</span>`);
+    setHtml("#fulfillment-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
 async function previewBulkOrders() {
   try {
-    const result = await api("/api/v1/admin/external-samples/preview", {
+    const result = await api("/api/v1/admin/imports/preview", {
       method: "POST",
       body: JSON.stringify(readBulkOrderPayload()),
     });
+    currentBulkOrderBatchId = result.batchId || "";
     renderBulkOrderResult(result, "preview");
   } catch (error) {
     setHtml("#bulk-order-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
   }
 }
 
+async function previewFulfillment() {
+  try {
+    const result = await api("/api/v1/admin/imports/preview", {
+      method: "POST",
+      body: JSON.stringify(readFulfillmentPayload()),
+    });
+    currentFulfillmentBatchId = result.batchId || "";
+    renderBulkOrderResult(result, "preview", "#fulfillment-result");
+  } catch (error) {
+    setHtml("#fulfillment-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
 async function importBulkOrders() {
   try {
-    const result = await api("/api/v1/admin/external-samples/import", {
+    if (!currentBulkOrderBatchId) await previewBulkOrders();
+    if (!currentBulkOrderBatchId) throw new Error("请先预览订单导入批次");
+    const result = await api(`/api/v1/admin/imports/${encodeURIComponent(currentBulkOrderBatchId)}/confirm`, {
       method: "POST",
-      body: JSON.stringify(readBulkOrderPayload()),
+      body: JSON.stringify({}),
     });
     renderBulkOrderResult(result, "import");
     await load();
-    setHtml("#match-result", `<div class="inline-success">已写入 ${result.importedCount || 0} 条订单，可在左侧待匹配列表继续选择用户。</div>`);
+    const importedCount = result.result ? result.result.importedCount || 0 : 0;
+    setHtml("#match-result", `<div class="inline-success">已写入 ${importedCount} 条订单，可在左侧待匹配列表继续选择用户。</div>`);
   } catch (error) {
     setHtml("#bulk-order-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+async function importFulfillment() {
+  try {
+    if (!currentFulfillmentBatchId) await previewFulfillment();
+    if (!currentFulfillmentBatchId) throw new Error("请先预览物流导入批次");
+    const result = await api(`/api/v1/admin/imports/${encodeURIComponent(currentFulfillmentBatchId)}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    renderBulkOrderResult(result, "import", "#fulfillment-result");
+    await load();
+    const importedCount = result.result ? result.result.importedCount || 0 : 0;
+    setHtml("#match-result", `<div class="inline-success">已写入 ${importedCount} 条物流状态，并刷新用户物流/打卡启动状态。</div>`);
+  } catch (error) {
+    setHtml("#fulfillment-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
   }
 }
 
@@ -538,6 +671,21 @@ async function confirmSelectedMatch() {
     });
     setHtml("#match-result", `<div class="inline-success">匹配成功：${escapeHtml(result.order.youzanOrderNo)} 已绑定给 ${escapeHtml(result.user.nickname)}。</div>`);
     currentMatchPreview = null;
+    await load();
+  } catch (error) {
+    setHtml("#match-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+async function ignoreMatchConflict(taskId) {
+  const reason = window.prompt("请输入忽略冲突的原因", "运营已人工确认，本次无需继续提醒");
+  if (reason === null) return;
+  try {
+    await api("/api/v1/admin/corrections/apply", {
+      method: "POST",
+      body: JSON.stringify({ action: "IGNORE_CONFLICT", taskId, reason: reason.trim() }),
+    });
+    setHtml("#match-result", `<div class="inline-success">已忽略该匹配冲突，并写入审计记录。</div>`);
     await load();
   } catch (error) {
     setHtml("#match-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
@@ -777,7 +925,7 @@ function renderTasks(tasks) {
           const user = task.user ? `${task.user.nickname} · ${task.user.phone}` : (task.user_id || "未知用户");
           return `<div class="row task-row">
             <div>
-              <div class="title">${escapeHtml(type)} · ${escapeHtml(user)}</div>
+              <div class="title">${escapeHtml(task.label || type)} · ${escapeHtml(user)}</div>
               <div class="meta">${escapeHtml(task.reason || "待处理")}</div>
               <div class="meta">动作：${escapeHtml(task.suggestedAction || task.suggested_action || "复制跟进话术，人工确认后标记状态")}</div>
 	            <div class="script">话术：${escapeHtml(task.suggestedScript || task.suggested_script || "您好，我来确认一下今天的打卡情况。")}</div>
@@ -792,6 +940,175 @@ function renderTasks(tasks) {
         })
         .join("")
     : `<div class="row"><div class="meta">暂无运营待办。</div></div>`;
+}
+
+function renderMatchConflicts(tasks = []) {
+  const container = document.querySelector("#match-conflicts");
+  if (!container) return;
+  const conflicts = tasks
+    .filter((task) => (task.taskType || task.task_type) === "ORDER_PHONE_MATCH_CONFLICT")
+    .filter((task) => {
+      const metadata = task.metadata || {};
+      if (currentConflictFilter === "multi-order") return Boolean((metadata.candidateOrderIds || metadata.otherOrderIds || []).length);
+      if (currentConflictFilter === "multi-user") return Boolean((metadata.candidateUserIds || []).length);
+      return true;
+    });
+  if (!conflicts.length) {
+    container.innerHTML = currentData && (currentData.operationTasks || []).some((task) => (task.taskType || task.task_type) === "ORDER_PHONE_MATCH_CONFLICT")
+      ? `<section class="conflict-panel"><div class="meta">当前筛选下暂无冲突。</div></section>`
+      : "";
+    return;
+  }
+  const orderById = new Map((currentData ? currentData.orders || [] : []).map((order) => [order.orderId, order]));
+  container.innerHTML = `<section class="conflict-panel">
+    <div>
+      <h3>手机号匹配冲突</h3>
+      <p>同一个授权手机号命中多用户或多订单，需要运营核对后再手动匹配。</p>
+    </div>
+    ${conflicts.map((task) => {
+      const metadata = task.metadata || {};
+      const order = task.order || orderById.get(task.order_id) || {};
+      const relatedOrderIds = metadata.candidateOrderIds || metadata.otherOrderIds || [];
+      const relatedOrders = relatedOrderIds
+        .map((orderId) => orderById.get(orderId))
+        .filter(Boolean)
+        .map((item) => item.youzanOrderNo)
+        .join("、");
+      const candidates = (metadata.candidateUserIds || (metadata.userId ? [metadata.userId] : [])).join("、");
+      return `<div class="conflict-row">
+        <div>
+          <strong>${escapeHtml(order.youzanOrderNo || task.order_id || "未知订单")}</strong>
+          <span>${escapeHtml(task.reason || "手机号匹配冲突")}</span>
+          <em>${escapeHtml([
+            metadata.phone ? `手机号 ${maskPhone(metadata.phone)}` : "",
+            candidates ? `候选用户 ${candidates}` : "",
+            relatedOrders ? `相关订单 ${relatedOrders}` : "",
+          ].filter(Boolean).join(" · "))}</em>
+        </div>
+        <div class="task-actions">
+          ${order.orderId ? `<button data-select-order-id="${escapeHtml(order.orderId)}">去匹配</button>` : ""}
+          <button class="ghost" data-ignore-conflict-task-id="${escapeHtml(task.taskId || task.task_id)}">忽略</button>
+        </div>
+      </div>`;
+    }).join("")}
+  </section>`;
+}
+
+function sourceTypeLabel(sourceType) {
+  return {
+    YOUZAN_ORDER: "有赞订单",
+    FULFILLMENT: "物流状态",
+    WECHAT_LEAD: "企业微信线索",
+  }[sourceType] || sourceType || "-";
+}
+
+function importResultSummary(batch = {}) {
+  const result = batch.result || batch.preview || {};
+  return {
+    total: result.total || 0,
+    imported: result.importedCount || 0,
+    importable: result.importableCount || 0,
+    errors: result.errorCount || 0,
+    warnings: result.warningCount || 0,
+  };
+}
+
+function batchMatchesFilter(batch) {
+  return !currentBatchSourceFilter || batch.sourceType === currentBatchSourceFilter;
+}
+
+function renderImportBatches(batches = []) {
+  const visible = batches.filter(batchMatchesFilter);
+  setHtml("#import-batches", visible.length ? visible.map((batch) => {
+    const summary = importResultSummary(batch);
+    const file = batch.fileSummary || {};
+    return `<div class="ledger-row">
+      <div>
+        <strong>${escapeHtml(sourceTypeLabel(batch.sourceType))} · ${escapeHtml(batch.status)}</strong>
+        <div class="meta">${escapeHtml(file.fileName || "未命名文件")} · ${escapeHtml(formatDateCn((batch.updatedAt || batch.createdAt || "").slice(0, 10), dashboardReferenceDate()))} · hash ${escapeHtml(String(batch.contentHash || "").slice(0, 12))}</div>
+        <div class="meta">总 ${summary.total} · 可写 ${summary.importable} · 已写 ${summary.imported} · 错误 ${summary.errors} · 提醒 ${summary.warnings}</div>
+      </div>
+      <div class="task-actions">
+        <button class="ghost" data-batch-detail-id="${escapeHtml(batch.batchId)}">详情</button>
+        ${summary.errors ? `<button data-batch-export-id="${escapeHtml(batch.batchId)}">导出失败</button>` : ""}
+      </div>
+    </div>`;
+  }).join("") : `<div class="meta">暂无导入批次。</div>`);
+}
+
+async function loadImportBatchDetail(batchId) {
+  try {
+    const batch = await api(`/api/v1/admin/imports/${encodeURIComponent(batchId)}`);
+    const summary = importResultSummary(batch);
+    const rows = ((batch.result || batch.preview || {}).rows || []).slice(0, 8);
+    setHtml("#import-batch-detail", `
+      <div class="ledger-row">
+        <div>
+          <strong>${escapeHtml(sourceTypeLabel(batch.sourceType))} · ${escapeHtml(batch.batchId)}</strong>
+          <div class="meta">状态 ${escapeHtml(batch.status)} · 总 ${summary.total} · 已写 ${summary.imported} · 错误 ${summary.errors} · 提醒 ${summary.warnings}</div>
+          <div class="meta">文件：${escapeHtml((batch.fileSummary || {}).fileName || "未命名")} · 内容 hash ${escapeHtml(batch.contentHash || "")}</div>
+        </div>
+        <div class="task-actions">${summary.errors ? `<button data-batch-export-id="${escapeHtml(batch.batchId)}">导出失败</button>` : ""}</div>
+      </div>
+      ${rows.map((row) => `<div class="bulk-row">
+        <div class="bulk-row-head">
+          <strong>#${row.index} · ${row.errors && row.errors.length ? "失败" : row.imported ? "已写入" : "预览"}</strong>
+          <span>${escapeHtml((row.errors || row.warnings || []).join("；") || "OK")}</span>
+        </div>
+        <div class="meta">${escapeHtml(JSON.stringify(row.mapped || {}))}</div>
+      </div>`).join("")}
+    `);
+  } catch (error) {
+    setHtml("#import-batch-detail", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+async function exportBatchFailures(batchId) {
+  try {
+    const adminToken = getAdminToken();
+    const response = await fetch(`/api/v1/admin/imports/${encodeURIComponent(batchId)}/failures.csv`, {
+      headers: adminToken ? { "X-Admin-Token": adminToken, "X-ROOT-ADMIN-TOKEN": adminToken } : {},
+    });
+    if (!response.ok) throw new Error("导出失败，请检查后台口令");
+    const text = await response.text();
+    const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${batchId}-failures.csv`;
+    document.body.appendChild(link);
+    link.click();
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  } catch (error) {
+    setHtml("#import-batch-detail", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
+}
+
+function auditMatchesFilters(log) {
+  if (currentAuditAction && log.action !== currentAuditAction) return false;
+  if (!currentAuditKeyword) return true;
+  const text = [
+    log.action,
+    log.target_type,
+    log.target_id,
+    log.operator_id,
+    log.reason,
+    JSON.stringify(log.before || {}),
+    JSON.stringify(log.after || {}),
+  ].join(" ").toLowerCase();
+  return text.includes(currentAuditKeyword.toLowerCase());
+}
+
+function renderAuditLogs(logs = []) {
+  const visible = logs.filter(auditMatchesFilters);
+  setHtml("#audit-logs", visible.length ? visible.map((log) => `<div class="audit-row">
+    <div>
+      <strong>${escapeHtml(log.action)} · ${escapeHtml(log.target_type || "-")}</strong>
+      <div class="meta">${escapeHtml(log.target_id || "-")} · ${escapeHtml(log.operator_id || "unknown")} · ${escapeHtml(formatDateCn(String(log.created_at || "").slice(0, 10), dashboardReferenceDate()))}</div>
+      <div class="meta">原因：${escapeHtml(log.reason || "未填写")}</div>
+    </div>
+    <span class="pill">${escapeHtml(log.audit_log_id || "")}</span>
+  </div>`).join("") : `<div class="meta">暂无审计记录。</div>`);
 }
 
 function renderReadyUsers(items) {
@@ -1126,6 +1443,7 @@ async function load() {
   renderOpsDashboard(data.opsDashboard || {});
   renderMetrics(data.metrics);
   renderSummary(data.summary);
+  renderDailyOpsSummary(data.dailyOpsSummary || {});
   renderLaunchReadiness(data.launchReadiness);
   renderAdapterCalibration(data.adapterCalibration || {});
   renderReleaseRecord(data.releaseRecord || {});
@@ -1134,6 +1452,9 @@ async function load() {
   renderRefunds(data.refunds);
   renderTaskFilter(data.operationTasks || []);
   renderTasks(data.operationTasks || []);
+  renderMatchConflicts(data.operationTasks || []);
+  renderImportBatches(data.importBatches || []);
+  renderAuditLogs(data.auditLogs || []);
   renderReadyUsers(data.readyToStartUsers || []);
   renderCoupons(data.couponSummary || {}, data.coupons || []);
   renderSampleTemplate();
@@ -1166,6 +1487,10 @@ async function copyText(text) {
 }
 
 on("#refresh", "click", load);
+on("#admin-token", "click", async () => {
+  promptAdminToken();
+  await load();
+});
 on("#run-audit", "click", async () => {
   await api("/api/v1/jobs/daily-audit", { method: "POST", body: JSON.stringify({}) });
   await load();
@@ -1193,6 +1518,21 @@ document.body.addEventListener("click", async (event) => {
     selectedUserId = userButton.dataset.selectUserId;
     setActiveTab("orders");
     await previewSelectedMatch();
+    return;
+  }
+  const ignoreConflictButton = event.target.closest("[data-ignore-conflict-task-id]");
+  if (ignoreConflictButton) {
+    await ignoreMatchConflict(ignoreConflictButton.dataset.ignoreConflictTaskId);
+    return;
+  }
+  const batchDetailButton = event.target.closest("[data-batch-detail-id]");
+  if (batchDetailButton) {
+    await loadImportBatchDetail(batchDetailButton.dataset.batchDetailId);
+    return;
+  }
+  const batchExportButton = event.target.closest("[data-batch-export-id]");
+  if (batchExportButton) {
+    await exportBatchFailures(batchExportButton.dataset.batchExportId);
   }
 });
 on("#search-order-matching", "click", searchOrderMatching);
@@ -1205,8 +1545,34 @@ on("#confirm-match", "click", confirmSelectedMatch);
 on("#toggle-bulk-orders", "click", toggleBulkOrderPanel);
 on("#insert-bulk-order-template", "click", insertBulkOrderTemplate);
 on("#bulk-order-file", "change", loadBulkOrderCsvFile);
+on("#bulk-order-input", "input", () => {
+  currentBulkOrderBatchId = "";
+});
 on("#preview-bulk-orders", "click", previewBulkOrders);
 on("#import-bulk-orders", "click", importBulkOrders);
+on("#insert-fulfillment-template", "click", insertFulfillmentTemplate);
+on("#fulfillment-file", "change", loadFulfillmentCsvFile);
+on("#fulfillment-input", "input", () => {
+  currentFulfillmentBatchId = "";
+});
+on("#preview-fulfillment", "click", previewFulfillment);
+on("#import-fulfillment", "click", importFulfillment);
+on("#conflict-filter", "change", (event) => {
+  currentConflictFilter = event.target.value;
+  renderMatchConflicts(currentData ? currentData.operationTasks || [] : []);
+});
+on("#batch-source-filter", "change", (event) => {
+  currentBatchSourceFilter = event.target.value;
+  renderImportBatches(currentData ? currentData.importBatches || [] : []);
+});
+on("#audit-search", "input", (event) => {
+  currentAuditKeyword = event.target.value.trim();
+  renderAuditLogs(currentData ? currentData.auditLogs || [] : []);
+});
+on("#audit-action-filter", "change", (event) => {
+  currentAuditAction = event.target.value;
+  renderAuditLogs(currentData ? currentData.auditLogs || [] : []);
+});
 on("#task-filter", "change", (event) => {
   currentTaskType = event.target.value;
   renderTasks(currentData ? currentData.operationTasks || [] : []);

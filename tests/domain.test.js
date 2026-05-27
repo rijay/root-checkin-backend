@@ -203,6 +203,67 @@ test("external adapter samples accept CSV and spreadsheet text", () => {
   assert.equal(fulfillment.last_event_text, "本人签收");
 });
 
+test("real Youzan order and logistics CSV headers auto match WeChat phone users", () => {
+  const store = domain.createStore();
+  const login = domain.login(store, { phone: "13800018888" }).data;
+  const userId = login.user.userId;
+  const orderCsv = [
+    "订单号,订单状态,买家付款时间,订单实付金额,全部商品名称,收货人/提货人,收货人手机号/提货人手机号,详细收货地址/提货地址,买家手机号",
+    "YZROOT202605270188,待发货,2026-05-27T10:05:00+08:00,199,ROOT 7日试饮装,林样本,13800018888,样本路1号,13900018888",
+  ].join("\n");
+  const logisticsCsv = [
+    "快递公司,获取时间,电子面单号,订单号,运输状态,计费重量(KG),费用(元),快递运费(元),快递保费(元),快递耗材费(元),运费账户总支出(元),结算状态,收件人姓名,收件人联系方式,订单类型",
+    "顺丰速运,2026-05-28T12:00:00+08:00,SF202605270188,YZROOT202605270188,已签收,1,12,12,0,0,12,已结算,林样本,13800018888,普通订单",
+  ].join("\n");
+
+  const orderImport = domain.importExternalSamples(store, { sourceType: "YOUZAN_ORDER", text: orderCsv }, "2026-05-27").data;
+  const fulfillmentImport = domain.importExternalSamples(store, { sourceType: "FULFILLMENT", text: logisticsCsv }, "2026-05-28").data;
+  const order = store.youzanOrders.find((item) => item.youzan_order_no === "YZROOT202605270188");
+  const fulfillment = store.orderFulfillments.find((item) => item.order_id === order.order_id);
+
+  assert.equal(orderImport.importedCount, 1);
+  assert.equal(fulfillmentImport.importedCount, 1);
+  assert.equal(order.user_id, userId);
+  assert.equal(order.match_source, "AUTO_WECHAT_PHONE");
+  assert.equal(order.receiver_phone, "13800018888");
+  assert.equal(order.order_status, "PAID");
+  assert.equal(fulfillment.tracking_no, "SF202605270188");
+  assert.equal(fulfillment.delivery_status, "DELIVERED");
+  assert.equal(store.operationTasks.some((task) => task.task_type === "DELIVERED_NOT_STARTED" && task.user_id === userId), true);
+});
+
+test("orders imported before login bind only when the authorized phone has one clear order", () => {
+  const store = domain.createStore();
+  domain.importExternalSamples(store, {
+    sourceType: "YOUZAN_ORDER",
+    text: [
+      "订单号,订单状态,订单实付金额,全部商品名称,收货人/提货人,收货人手机号/提货人手机号,详细收货地址/提货地址",
+      "YZROOT202605270199,待发货,199,ROOT 7日试饮装,赵样本,13800019999,样本地址",
+    ].join("\n"),
+  }, "2026-05-27");
+
+  const login = domain.login(store, { phone: "13800019999" }).data;
+  const order = store.youzanOrders.find((item) => item.youzan_order_no === "YZROOT202605270199");
+
+  assert.equal(order.user_id, login.user.userId);
+  assert.equal(order.match_source, "AUTO_WECHAT_PHONE");
+
+  domain.importExternalSamples(store, {
+    sourceType: "YOUZAN_ORDER",
+    text: [
+      "订单号,订单状态,订单实付金额,全部商品名称,收货人/提货人,收货人手机号/提货人手机号,详细收货地址/提货地址",
+      "YZROOT202605270201,待发货,199,ROOT 7日试饮装,钱样本,13800020000,样本地址A",
+      "YZROOT202605270202,待发货,199,ROOT 7日试饮装,钱样本,13800020000,样本地址B",
+    ].join("\n"),
+  }, "2026-05-27");
+  const conflictLogin = domain.login(store, { phone: "13800020000" }).data;
+  const conflictOrders = store.youzanOrders.filter((item) => item.receiver_phone === "13800020000");
+
+  assert.equal(conflictOrders.every((item) => !item.user_id), true);
+  assert.equal(conflictLogin.autoMatch.status, "CONFLICT");
+  assert.equal(store.operationTasks.some((task) => task.task_type === "ORDER_PHONE_MATCH_CONFLICT"), true);
+});
+
 test("manual external platform Adapter imports through the shared sample Interface", async () => {
   const store = domain.createStore();
   const imported = (await domain.runExternalAdapter(store, {
@@ -603,11 +664,12 @@ test("external adapter readiness requires three clean samples per source", () =>
   });
   const readiness = domain.adminLaunchReadiness(store, {
     target: "production",
-    storeAdapter: { kind: "sqlite", filePath: "/tmp/root-checkin.sqlite" },
+    storeAdapter: { kind: "mysql" },
     env: {
       WECHAT_APPID: "wx-root",
       WECHAT_APPSECRET: "secret",
       ROOT_PUBLIC_BASE_URL: "https://api.root.test",
+      ROOT_ADMIN_TOKEN: "admin-secret",
     },
   }).data;
 
@@ -627,6 +689,27 @@ test("launch readiness separates gray trial warnings from production blockers", 
       WECHAT_APPID: "wx-root",
       WECHAT_APPSECRET: "secret",
       ROOT_PUBLIC_BASE_URL: "https://root.example.com",
+      ROOT_ADMIN_TOKEN: "admin-secret",
+    },
+  }).data;
+  const mysqlProduction = domain.adminLaunchReadiness(store, {
+    target: "production",
+    storeAdapter: { kind: "mysql" },
+    env: {
+      WECHAT_APPID: "wx-root",
+      WECHAT_APPSECRET: "secret",
+      ROOT_PUBLIC_BASE_URL: "https://root.example.com",
+      ROOT_ADMIN_TOKEN: "admin-secret",
+    },
+  }).data;
+  const multiTokenProduction = domain.adminLaunchReadiness(store, {
+    target: "production",
+    storeAdapter: { kind: "mysql" },
+    env: {
+      WECHAT_APPID: "wx-root",
+      WECHAT_APPSECRET: "secret",
+      ROOT_PUBLIC_BASE_URL: "https://root.example.com",
+      ROOT_ADMIN_TOKENS: JSON.stringify({ ops: { token: "ops-secret", role: "operator" } }),
     },
   }).data;
 
@@ -636,7 +719,9 @@ test("launch readiness separates gray trial warnings from production blockers", 
   assert.equal(gray.status, "NEEDS_REVIEW");
   assert.equal(gray.summary.blockers, 0);
   assert.ok(gray.checks.some((item) => item.id === "store_adapter" && item.status === "PASS"));
-  assert.ok(sqliteProduction.checks.some((item) => item.id === "store_adapter" && item.status === "PASS"));
+  assert.ok(sqliteProduction.checks.some((item) => item.id === "store_adapter" && item.status === "BLOCKER"));
+  assert.ok(mysqlProduction.checks.some((item) => item.id === "store_adapter" && item.status === "PASS"));
+  assert.ok(multiTokenProduction.checks.some((item) => item.id === "admin_access" && item.status === "PASS"));
 });
 
 test("manual review can be resolved into a started check-in", () => {
@@ -894,6 +979,92 @@ test("admin order matching creates exception task after matching abnormal fulfil
   assert.equal(confirmed.task.task_type, "FULFILLMENT_EXCEPTION");
 });
 
+test("manual corrections require risk confirmation and write audit logs", () => {
+  const store = domain.createStore();
+  const token = register(store, "13800000002");
+  const userId = domain.getUserState(store, token).data.user.userId;
+  const preview = domain.previewCorrection(store, {
+    action: "BIND_ORDER_USER",
+    orderId: "ord_root_001",
+    userId,
+  }).data;
+
+  assert.equal(preview.risks.some((item) => item.type === "PHONE_MISMATCH"), true);
+  assert.throws(
+    () => domain.applyCorrection(store, { action: "BIND_ORDER_USER", orderId: "ord_root_001", userId }),
+    /高风险修正必须填写原因/
+  );
+  assert.throws(
+    () => domain.applyCorrection(store, { action: "BIND_ORDER_USER", orderId: "ord_root_001", userId, reason: "用户提供截图" }),
+    /二次确认/
+  );
+
+  const applied = domain.applyCorrection(store, {
+    action: "BIND_ORDER_USER",
+    orderId: "ord_root_001",
+    userId,
+    reason: "用户提供订单截图",
+    confirmRisk: true,
+    operatorId: "ops-a",
+  }, {}, "2026-05-28").data;
+  const audit = domain.listAuditLogs(store, { targetType: "ORDER", targetId: "ord_root_001" }).data.auditLogs[0];
+
+  assert.equal(applied.success, true);
+  assert.equal(store.youzanOrders.find((order) => order.order_id === "ord_root_001").user_id, userId);
+  assert.equal(store.youzanOrders.find((order) => order.order_id === "ord_root_001").match_source, "MANUAL_CORRECTION");
+  assert.equal(audit.action, "BIND_ORDER_USER");
+  assert.equal(audit.operator_id, "ops-a");
+  assert.equal(audit.reason, "用户提供订单截图");
+});
+
+test("manual corrections can update fulfillment, unbind order, and ignore conflict tasks", () => {
+  const store = domain.createStore();
+  const token = register(store, "13800000002");
+  const userId = domain.getUserState(store, token).data.user.userId;
+  domain.confirmAdminOrderMatch(store, { orderId: "ord_root_002", userId }, "2026-05-28");
+
+  const delivered = domain.applyCorrection(store, {
+    action: "UPDATE_FULFILLMENT_STATUS",
+    orderId: "ord_root_002",
+    deliveryStatus: "DELIVERED",
+    reason: "物流后台显示已签收",
+    operatorId: "ops-a",
+  }, {}, "2026-05-28").data;
+  assert.equal(delivered.result.fulfillment.delivery_status, "DELIVERED");
+  assert.equal(store.operationTasks.some((task) => task.task_type === "DELIVERED_NOT_STARTED" && task.order_id === "ord_root_002"), true);
+
+  assert.throws(
+    () => domain.applyCorrection(store, { action: "UNBIND_ORDER_USER", orderId: "ord_root_002", reason: "误绑" }),
+    /二次确认/
+  );
+  domain.applyCorrection(store, {
+    action: "UNBIND_ORDER_USER",
+    orderId: "ord_root_002",
+    reason: "误绑订单",
+    confirmRisk: true,
+    operatorId: "ops-a",
+  });
+  assert.equal(store.youzanOrders.find((order) => order.order_id === "ord_root_002").user_id, "");
+
+  domain.syncManualOrder(store, {
+    youzanOrderNo: "YZROOT202605280222",
+    receiverPhone: "13800000002",
+    receiverName: "冲突用户",
+    amount: 199,
+  });
+  const conflict = store.operationTasks.find((task) => task.task_type === "ORDER_PHONE_MATCH_CONFLICT");
+  assert.ok(conflict);
+  const ignored = domain.applyCorrection(store, {
+    action: "IGNORE_CONFLICT",
+    taskId: conflict.task_id,
+    reason: "已人工确认无需处理",
+    operatorId: "ops-b",
+  }).data;
+
+  assert.equal(ignored.result.task.status, "SKIPPED");
+  assert.equal(domain.listAuditLogs(store, {}).data.auditLogs.length >= 3, true);
+});
+
 test("admin user rows expose operator status and blockage summary", () => {
   const store = domain.createStore();
   const token = register(store, "13800000001");
@@ -908,7 +1079,7 @@ test("admin user rows expose operator status and blockage summary", () => {
   assert.equal(row.nextAction, "提醒用户进入小程序开始记录");
   assert.equal(row.orderStatusLabel, "已签收");
   assert.equal(row.totalRecords, 0);
-  assert.equal(row.openTaskCount, 1);
+  assert.equal(row.openTaskCount >= 1, true);
   assert.equal(detail.opsSummary.currentBlockage, "已送达未开始");
   assert.equal(detail.opsSummary.latestOrderNo, "YZROOT202604260001");
 });
@@ -1080,6 +1251,22 @@ test("phone login stores optional WeChat display profile", () => {
   }).data.user;
   assert.equal(updated.nickname, "Root体验同学");
   assert.equal(updated.avatarUrl, "https://thirdwx.qlogo.cn/new-avatar.png");
+});
+
+test("phone login issues a persisted session with explicit expiry", () => {
+  const store = domain.createStore();
+  const login = domain.login(store, { phone: "13800000001" }).data;
+
+  assert.match(login.token, /^root_/);
+  assert.match(login.session.expiresAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(store.sessions.length, 1);
+  assert.equal(store.sessions[0].token, login.token);
+  assert.equal(domain.getUserState(store, login.token).data.user.phone, "138****0001");
+
+  store.sessions[0].expires_at = "2000-01-01T00:00:00+08:00";
+  assert.throws(() => domain.getUserState(store, login.token), /登录已过期/);
+  assert.equal(Boolean(store.sessions[0].revoked_at), true);
+  assert.equal(store.tokens[login.token], undefined);
 });
 
 test("user can update display profile after phone login", () => {

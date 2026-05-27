@@ -18,6 +18,7 @@
         </div>
         <div class="header-actions">
           <span class="env-pill">本地环境</span>
+          <button class="ghost" id="admin-token" type="button">后台口令</button>
           <button id="refresh">刷新数据</button>
         </div>
       </header>
@@ -42,6 +43,7 @@
             <button id="run-audit">生成今日 Summary</button>
           </div>
           <div id="summary" class="summary-grid"></div>
+          <div id="daily-ops-summary" class="daily-ops-summary"></div>
         </section>
         <section class="ops-grid">
           <div class="panel ops-main">
@@ -123,7 +125,7 @@
               <h2>订单匹配</h2>
               <span class="hint">搜索订单和用户，预览风险后确认写入</span>
             </div>
-            <button class="ghost" id="toggle-bulk-orders" type="button">批量导入订单</button>
+            <button class="ghost" id="toggle-bulk-orders" type="button">每日导入</button>
           </div>
           <div class="order-searchbar">
             <input id="order-match-search" type="search" placeholder="输入订单号、手机号、收货人或昵称" aria-label="订单匹配搜索" />
@@ -131,11 +133,20 @@
             <button class="ghost" id="clear-order-matching">清空选择</button>
           </div>
           <div id="match-result" class="match-result"></div>
+          <div class="conflict-toolbar">
+            <select id="conflict-filter" aria-label="冲突筛选">
+              <option value="">全部冲突</option>
+              <option value="multi-order">同手机号多订单</option>
+              <option value="multi-user">同手机号多用户</option>
+            </select>
+          </div>
+          <div id="match-conflicts" class="match-conflicts"></div>
           <div id="bulk-order-panel" class="bulk-paste-panel" hidden>
             <div class="bulk-paste-copy">
-              <h3>批量导入订单</h3>
-              <p>上传有赞导出的 CSV，或直接粘贴 CSV/表格文本。预览只校验，不写入；确认写入后订单会进入待匹配列表。</p>
+              <h3>每日导入</h3>
+              <p>先上传有赞订单 CSV，再上传物流状态 CSV。预览只生成批次，不写入；确认写入后才会更新订单、物流和自动匹配结果。</p>
             </div>
+            <h3>有赞订单 CSV</h3>
             <div class="bulk-file-row">
               <label class="bulk-file-control" for="bulk-order-file">
                 <span>上传有赞 CSV 文件</span>
@@ -151,6 +162,23 @@
             </div>
             <div id="bulk-order-result" class="bulk-order-result">
               <div class="meta">可上传有赞原始 CSV，或粘贴：订单号、收货人、收货手机号、商品名称、实付金额、订单状态、物流状态、收货地址。</div>
+            </div>
+            <h3>物流状态 CSV</h3>
+            <div class="bulk-file-row">
+              <label class="bulk-file-control" for="fulfillment-file">
+                <span>上传物流 CSV 文件</span>
+                <input id="fulfillment-file" type="file" accept=".csv,text/csv" aria-label="上传物流CSV文件" />
+              </label>
+              <div id="fulfillment-file-status" class="meta">支持物流状态导出的原始表头，选择文件后会自动预览。</div>
+            </div>
+            <textarea id="fulfillment-input" class="bulk-order-input" spellcheck="false" aria-label="物流状态内容"></textarea>
+            <div class="bulk-actions">
+              <button id="preview-fulfillment" type="button">预览物流</button>
+              <button id="import-fulfillment" class="ghost" type="button">确认写入</button>
+              <button id="insert-fulfillment-template" class="ghost" type="button">填入表头</button>
+            </div>
+            <div id="fulfillment-result" class="bulk-order-result">
+              <div class="meta">可上传物流原始 CSV，或粘贴：快递公司、获取时间、电子面单号、订单号、运输状态、收件人姓名、收件人联系方式。</div>
             </div>
           </div>
           <div class="order-workbench" id="order-workbench">
@@ -200,6 +228,23 @@
               <button id="confirm-match" type="button">确认匹配</button>
             </div>
           </div>
+          <section class="ledger-panel">
+            <div class="panel-head">
+              <div>
+                <h2>导入台账</h2>
+                <span class="hint">回看最近导入批次、失败行和确认结果</span>
+              </div>
+              <select id="batch-source-filter" aria-label="导入来源筛选">
+                <option value="">全部来源</option>
+                <option value="YOUZAN_ORDER">有赞订单</option>
+                <option value="FULFILLMENT">物流状态</option>
+              </select>
+            </div>
+            <div id="import-batches" class="ledger-list"></div>
+            <div id="import-batch-detail" class="ledger-detail">
+              <div class="meta">选择批次后查看详情。</div>
+            </div>
+          </section>
         </section>
       </section>
 
@@ -238,6 +283,25 @@
             <span class="hint">正式上线前阻塞项</span>
           </div>
           <div id="launch-readiness" class="readiness-body"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>审计记录</h2>
+              <span class="hint">查询手动修正与冲突处理记录</span>
+            </div>
+          </div>
+          <div class="audit-toolbar">
+            <input id="audit-search" type="search" placeholder="搜索订单、原因、操作人" aria-label="审计搜索" />
+            <select id="audit-action-filter" aria-label="审计动作筛选">
+              <option value="">全部动作</option>
+              <option value="UPDATE_FULFILLMENT_STATUS">修正物流</option>
+              <option value="BIND_ORDER_USER">绑定订单</option>
+              <option value="UNBIND_ORDER_USER">解绑订单</option>
+              <option value="IGNORE_CONFLICT">忽略冲突</option>
+            </select>
+          </div>
+          <div id="audit-logs" class="ledger-list"></div>
         </section>
         <section class="panel calibration-panel">
           <div class="panel-head">

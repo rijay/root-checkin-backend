@@ -6,7 +6,10 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { createApp } = require("../src/app");
-const { createJsonFileStore, createSqliteStore } = require("../src/store");
+const { shouldUseMysql } = require("../src/server");
+const { createJsonFileStore, createSqliteStore, mysqlConfigFromEnv, validateSnapshot } = require("../src/store");
+const { parseArgs: parseStoreVerifyArgs } = require("../scripts/store-verify");
+const { parseArgs: parseStoreMigrateArgs } = require("../scripts/store-migrate");
 const { buildCalibrationReport, determineExitCode } = require("../scripts/release-calibration");
 const { buildSampleCalibrationReport, determineExitCode: determineSampleExitCode } = require("../scripts/sample-calibration");
 const {
@@ -18,6 +21,36 @@ const {
 } = require("../scripts/adapter-runner");
 
 const directPhoneLoginEnv = { ROOT_ALLOW_DIRECT_PHONE_LOGIN: "true" };
+
+test("cloud hosting MySQL variables select the MySQL Store Adapter", () => {
+  const env = {
+    MYSQL_ADDRESS: "10.11.103.164:3306",
+    MYSQL_USERNAME: "root",
+    MYSQL_PASSWORD: "secret",
+  };
+
+  assert.equal(shouldUseMysql(env), true);
+  assert.deepEqual(mysqlConfigFromEnv(env), {
+    host: "10.11.103.164",
+    port: 3306,
+    user: "root",
+    password: "secret",
+    database: "root_checkin",
+  });
+  assert.equal(shouldUseMysql({ ...env, ROOT_STORE_ADAPTER: "sqlite" }), false);
+  assert.equal(shouldUseMysql({ ROOT_STORE_ADAPTER: "mysql" }), true);
+});
+
+test("store snapshot validation catches missing keys and script arguments", () => {
+  const valid = validateSnapshot(createJsonFileStore(path.join(os.tmpdir(), `root-store-${Date.now()}.json`), { seedSampleData: false }).exportSnapshot());
+  const invalid = validateSnapshot({ users: [] });
+
+  assert.equal(valid.valid, true);
+  assert.equal(invalid.valid, false);
+  assert.ok(invalid.errors.some((item) => item.includes("missing key")));
+  assert.deepEqual(parseStoreVerifyArgs(["--sqlite", "/tmp/root.sqlite"]), { mode: "sqlite", filePath: "/tmp/root.sqlite" });
+  assert.deepEqual(parseStoreMigrateArgs(["--json", "/tmp/root.json", "--dry-run"]), { mode: "json", filePath: "/tmp/root.json", dryRun: true });
+});
 
 function listen(server) {
   return new Promise((resolve) => {
@@ -55,6 +88,8 @@ test("serves the REST API and admin dashboard data", async (t) => {
   assert.match(home.body, /ROOT 7日打卡后台/);
   assert.match(home.body, /id="bulk-order-file"/);
   assert.match(home.body, /上传有赞 CSV 文件/);
+  assert.match(home.body, /id="fulfillment-file"/);
+  assert.match(home.body, /上传物流 CSV 文件/);
 
   const login = await request(baseUrl, "/api/v1/auth/login", {
     method: "POST",
@@ -101,7 +136,7 @@ test("serves the REST API and admin dashboard data", async (t) => {
   assert.equal(dashboard.data.summary.date, "2026-04-27");
   assert.equal(dashboard.data.launchReadiness.status, "BLOCKED");
   assert.equal(Array.isArray(dashboard.data.opsUsers), true);
-  assert.equal(dashboard.data.opsUsers[0].currentBlockage, "暂无匹配订单");
+  assert.equal(dashboard.data.opsUsers[0].currentBlockage, "已送达未开始");
 
   const readiness = await request(baseUrl, "/api/v1/admin/launch-readiness?target=production");
   assert.equal(readiness.code, 0);
@@ -133,12 +168,12 @@ test("serves the REST API and admin dashboard data", async (t) => {
   assert.equal(template.code, 0);
   assert.equal(template.data.sourceType, "FULFILLMENT");
   assert.equal(template.data.requiredSamples, 3);
-  assert.match(template.data.csvHeader, /有赞订单号/);
+  assert.match(template.data.csvHeader, /订单号/);
 
   const detail = await request(baseUrl, `/api/v1/admin/users/${login.data.user.userId}/detail`);
   assert.equal(detail.code, 0);
   assert.equal(detail.data.user.userId, login.data.user.userId);
-  assert.equal(detail.data.opsSummary.currentBlockage, "暂无匹配订单");
+  assert.equal(detail.data.opsSummary.currentBlockage, "已送达未开始");
   assert.deepEqual(detail.data.feedbacks, []);
 
   const follow = await request(baseUrl, `/api/v1/admin/users/${login.data.user.userId}/follow`, {
@@ -147,6 +182,41 @@ test("serves the REST API and admin dashboard data", async (t) => {
   });
   assert.equal(follow.code, 0);
   assert.equal(follow.data.task.taskType, "FEEDBACK_FOLLOW");
+});
+
+test("admin data routes require the configured admin token", async (t) => {
+  const server = createApp({
+    env: {
+      ...directPhoneLoginEnv,
+      ROOT_ADMIN_TOKEN: "admin-secret",
+      ROOT_ADMIN_TOKENS: JSON.stringify({ ops: { token: "ops-secret", role: "operator" } }),
+    },
+  });
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+
+  const denied = await request(baseUrl, "/api/v1/admin/dashboard");
+  assert.equal(denied.code, 40101);
+
+  const allowed = await request(baseUrl, "/api/v1/admin/dashboard", {
+    headers: { "X-Admin-Token": "admin-secret" },
+  });
+  assert.equal(allowed.code, 0);
+  assert.equal(typeof allowed.data.metrics.users, "number");
+  const allowedByRootHeader = await request(baseUrl, "/api/v1/admin/dashboard", {
+    headers: { "X-ROOT-ADMIN-TOKEN": "admin-secret" },
+  });
+  assert.equal(allowedByRootHeader.code, 0);
+  const allowedByOperator = await request(baseUrl, "/api/v1/admin/dashboard", {
+    headers: { "X-ROOT-ADMIN-TOKEN": "ops-secret" },
+  });
+  assert.equal(allowedByOperator.code, 0);
+
+  const jobDenied = await request(baseUrl, "/api/v1/jobs/daily-audit", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal(jobDenied.code, 40101);
 });
 
 test("cloud container login uses WeChat cloud open Interface", async (t) => {
@@ -279,6 +349,122 @@ test("admin bulk order paste previews and imports orders into matching queue", a
   assert.equal(rawPreview.data.rows[0].mapped.youzanOrderNo, "E20260525220543065306159");
   assert.equal(rawPreview.data.rows[0].mapped.receiverPhone, "13811611060");
   assert.equal(rawPreview.data.rows[0].mapped.deliveryStatus, "SHIPPED");
+});
+
+test("admin CSV import batches preview, confirm once, and expose batch detail", async (t) => {
+  const server = createApp({ env: directPhoneLoginEnv });
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+  const text = [
+    "订单号,订单状态,订单实付金额,全部商品名称,收货人/提货人,收货人手机号/提货人手机号,详细收货地址/提货地址",
+    "YZROOT202605280001,待发货,199,ROOT 7日试饮装,批次用户,13800028001,批次地址",
+    "YZROOT202605280002,待发货,199,ROOT 7日试饮装,缺手机号,,批次地址",
+  ].join("\n");
+
+  const preview = await request(baseUrl, "/api/v1/admin/imports/preview", {
+    method: "POST",
+    body: JSON.stringify({ sourceType: "YOUZAN_ORDER", text, fileName: "youzan.csv" }),
+  });
+  const beforeConfirm = await request(baseUrl, "/api/v1/admin/dashboard");
+  const confirmed = await request(baseUrl, `/api/v1/admin/imports/${preview.data.batchId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ operatorId: "ops" }),
+  });
+  const confirmedAgain = await request(baseUrl, `/api/v1/admin/imports/${preview.data.batchId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ operatorId: "ops" }),
+  });
+  const failureCsv = await textRequest(baseUrl, `/api/v1/admin/imports/${preview.data.batchId}/failures.csv`);
+  const detail = await request(baseUrl, `/api/v1/admin/imports/${preview.data.batchId}`);
+  const afterConfirm = await request(baseUrl, "/api/v1/admin/dashboard");
+  const fulfillmentText = [
+    "快递公司,获取时间,电子面单号,订单号,运输状态,收件人姓名,收件人联系方式",
+    "顺丰速运,2026-05-28 19:00:00,SF202605280001,YZROOT202605280001,已签收,批次用户,13800028001",
+  ].join("\n");
+  const fulfillmentPreview = await request(baseUrl, "/api/v1/admin/imports/preview", {
+    method: "POST",
+    body: JSON.stringify({ sourceType: "FULFILLMENT", text: fulfillmentText, fileName: "fulfillment.csv" }),
+  });
+  const fulfillmentConfirmed = await request(baseUrl, `/api/v1/admin/imports/${fulfillmentPreview.data.batchId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ operatorId: "ops" }),
+  });
+  const afterFulfillment = await request(baseUrl, "/api/v1/admin/dashboard");
+
+  assert.equal(preview.code, 0);
+  assert.match(preview.data.batchId, /^imp_/);
+  assert.match(preview.data.contentHash, /^[a-f0-9]{64}$/);
+  assert.equal(preview.data.preview.importableCount, 1);
+  assert.equal(preview.data.preview.errorCount, 1);
+  assert.equal(beforeConfirm.data.orders.some((order) => order.youzanOrderNo === "YZROOT202605280001"), false);
+  assert.equal(confirmed.data.status, "CONFIRMED");
+  assert.equal(confirmed.data.result.importedCount, 1);
+  assert.equal(confirmedAgain.data.result.importedCount, 1);
+  assert.match(failureCsv.contentType, /text\/csv/);
+  assert.match(failureCsv.body, /receiverPhone/);
+  assert.match(failureCsv.body, /缺手机号/);
+  assert.equal(detail.data.batchId, preview.data.batchId);
+  assert.equal(afterConfirm.data.orders.some((order) => order.youzanOrderNo === "YZROOT202605280001"), true);
+  assert.equal(afterConfirm.data.importBatches[0].batchId, preview.data.batchId);
+  assert.equal(fulfillmentPreview.data.preview.importableCount, 1);
+  assert.equal(fulfillmentConfirmed.data.result.importedCount, 1);
+  assert.equal(
+    afterFulfillment.data.orders.find((order) => order.youzanOrderNo === "YZROOT202605280001").deliveryStatus,
+    "DELIVERED"
+  );
+  assert.equal(
+    afterFulfillment.data.orders.find((order) => order.youzanOrderNo === "YZROOT202605280001").deliveryStatusLabel,
+    "已送达"
+  );
+  assert.equal(afterFulfillment.data.importBatches[0].batchId, fulfillmentPreview.data.batchId);
+
+  const login = await request(baseUrl, "/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ phone: "13800028001" }),
+  });
+  const userOrders = await request(baseUrl, "/api/v1/user/orders", {
+    headers: { Authorization: `Bearer ${login.data.token}` },
+  });
+  assert.equal(userOrders.data.orders[0].fulfillment.carrier, "顺丰速运");
+  assert.equal(userOrders.data.orders[0].fulfillment.trackingNo, "SF202605280001");
+});
+
+test("admin correction HTTP Interface previews, applies, and lists audit logs", async (t) => {
+  const server = createApp({ env: directPhoneLoginEnv });
+  const baseUrl = await listen(server);
+  t.after(() => server.close());
+  const login = await request(baseUrl, "/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ phone: "13800000002" }),
+  });
+
+  const preview = await request(baseUrl, "/api/v1/admin/corrections/preview", {
+    method: "POST",
+    body: JSON.stringify({ action: "BIND_ORDER_USER", orderId: "ord_root_001", userId: login.data.user.userId }),
+  });
+  const denied = await request(baseUrl, "/api/v1/admin/corrections/apply", {
+    method: "POST",
+    body: JSON.stringify({ action: "BIND_ORDER_USER", orderId: "ord_root_001", userId: login.data.user.userId }),
+  });
+  const applied = await request(baseUrl, "/api/v1/admin/corrections/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      action: "BIND_ORDER_USER",
+      orderId: "ord_root_001",
+      userId: login.data.user.userId,
+      reason: "HTTP修正测试",
+      confirmRisk: true,
+      operatorId: "ops-http",
+    }),
+  });
+  const audit = await request(baseUrl, "/api/v1/admin/audit-logs?targetType=ORDER&targetId=ord_root_001");
+
+  assert.equal(preview.code, 0);
+  assert.equal(preview.data.requiresSecondConfirm, true);
+  assert.equal(denied.code, 4206);
+  assert.equal(applied.code, 0);
+  assert.equal(applied.data.audit.action, "BIND_ORDER_USER");
+  assert.equal(audit.data.auditLogs[0].operator_id, "ops-http");
 });
 
 test("external platform adapter Interface exposes catalog and manual sample runs", async (t) => {

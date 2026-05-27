@@ -7,6 +7,7 @@ function createId(prefix) {
 function createSeedData() {
   return {
     tokens: {},
+    sessions: [],
     idempotency: {},
     users: [],
     profiles: [],
@@ -109,7 +110,9 @@ function createSeedData() {
     operationTasks: [],
     dailySummaries: [],
     externalSampleReviews: [],
+    importBatches: [],
     externalStatusMappings: [],
+    auditLogs: [],
     externalAdapterRuns: [],
     externalAdapterCursors: [],
     couponEvents: [],

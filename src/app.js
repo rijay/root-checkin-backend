@@ -5,11 +5,13 @@ const { createMemoryStore } = require("./store");
 const {
   adminDashboard,
   adminLaunchReadiness,
+  applyCorrection,
   applyRefund,
   approveRefund,
   claimCoupon,
   completeOperationTask,
   confirmAdminOrderMatch,
+  confirmImport,
   continueAsDailyUser,
   createFeedbackFollowTask,
   createStore,
@@ -22,6 +24,8 @@ const {
   getExternalAdapters,
   getExternalSampleTemplate,
   getAdminUserDetail,
+  getImportBatch,
+  exportImportFailuresCsv,
   getQuestionnaire,
   getQuestionnaireStatus,
   getReadyToStartUsers,
@@ -34,11 +38,15 @@ const {
   getUserState,
   importExternalSamples,
   loginWithWechat,
+  listImportBatches,
+  listAuditLogs,
   listOperationTasks,
   markCouponUsed,
   matchOrder,
   previewAdminOrderMatch,
+  previewCorrection,
   previewExternalSamples,
+  previewImport,
   recordCouponRepurchaseClick,
   resolveManualReview,
   runExternalAdapter,
@@ -85,7 +93,7 @@ function send(res, status, payload, headers = {}) {
   res.writeHead(status, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Request-Id",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Request-Id,X-Admin-Token,X-ROOT-ADMIN-TOKEN",
     "Content-Type": typeof payload === "string" ? "text/html; charset=utf-8" : "application/json; charset=utf-8",
     ...headers,
   });
@@ -100,6 +108,70 @@ function getToken(req) {
   const header = req.headers.authorization || "";
   const [, token] = header.match(/^Bearer\s+(.+)$/i) || [];
   return token || "";
+}
+
+function getAdminToken(req) {
+  const header = req.headers.authorization || "";
+  const [, bearerToken] = header.match(/^Bearer\s+(.+)$/i) || [];
+  return String(req.headers["x-root-admin-token"] || req.headers["x-admin-token"] || bearerToken || "");
+}
+
+function parseAdminTokens(env = process.env) {
+  const entries = [];
+  let configured = Boolean(env.ROOT_ADMIN_TOKEN);
+  if (env.ROOT_ADMIN_TOKENS) {
+    configured = true;
+    try {
+      const parsed = JSON.parse(env.ROOT_ADMIN_TOKENS);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((item) => {
+          if (item && item.token) entries.push({
+            token: String(item.token),
+            operatorId: String(item.operatorId || item.operator_id || item.name || "operator"),
+            role: String(item.role || "operator"),
+          });
+        });
+      } else if (parsed && typeof parsed === "object") {
+        Object.entries(parsed).forEach(([operatorId, value]) => {
+          if (typeof value === "string") {
+            entries.push({ token: value, operatorId, role: "operator" });
+            return;
+          }
+          if (value && value.token) entries.push({
+            token: String(value.token),
+            operatorId,
+            role: String(value.role || "operator"),
+          });
+        });
+      }
+    } catch (error) {
+      // Malformed multi-token config falls through to ROOT_ADMIN_TOKEN.
+    }
+  }
+  if (env.ROOT_ADMIN_TOKEN) entries.push({ token: String(env.ROOT_ADMIN_TOKEN), operatorId: "admin", role: "admin" });
+  return { entries, configured };
+}
+
+function getAdminPrincipal(req, env = process.env) {
+  const { entries, configured } = parseAdminTokens(env);
+  if (!configured) return { operatorId: "local-admin", role: "admin", tokenConfigured: false };
+  if (!entries.length) return null;
+  const token = getAdminToken(req);
+  const matched = entries.find((entry) => entry.token === token);
+  return matched ? { operatorId: matched.operatorId, role: matched.role, tokenConfigured: true } : null;
+}
+
+function requiresAdminAccess(pathname) {
+  return pathname.startsWith("/api/v1/admin/") || pathname === "/api/v1/jobs/daily-audit";
+}
+
+function hasAdminAccess(req, env = process.env) {
+  return Boolean(getAdminPrincipal(req, env));
+}
+
+function adminOperatorId(principal, body = {}) {
+  if (principal && principal.tokenConfigured) return principal.operatorId;
+  return body.operatorId || body.operator_id || (principal ? principal.operatorId : "");
 }
 
 function withIdempotency(data, req, action) {
@@ -138,12 +210,24 @@ function createApp(options = {}) {
   const storeAdapter = options.storeAdapter || createMemoryStore(options.store || createStore());
   const data = storeAdapter.data;
   const runtimeContext = { storeAdapter, env: options.env || process.env };
+  function persistStore() {
+    try {
+      const result = storeAdapter.save();
+      if (result && typeof result.catch === "function") {
+        result.catch((error) => {
+          console.error("Store save failed:", error.message);
+        });
+      }
+    } catch (error) {
+      console.error("Store save failed:", error.message);
+    }
+  }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     const method = req.method || "GET";
     if (url.pathname.startsWith("/api/") && typeof storeAdapter.save === "function") {
-      res.once("finish", () => storeAdapter.save());
+      res.once("finish", persistStore);
     }
 
     if (method === "OPTIONS") return send(res, 204, "");
@@ -151,9 +235,13 @@ function createApp(options = {}) {
     if (method === "GET" && ["/", "/admin", "/admin/"].includes(url.pathname)) return staticFile("admin.html", res);
     if (method === "GET" && url.pathname.startsWith("/assets/")) return staticFile(url.pathname.slice(1), res);
     if (method === "GET" && ["/admin.css", "/admin.js"].includes(url.pathname)) return staticFile(url.pathname.slice(1), res);
+    if (requiresAdminAccess(url.pathname) && !hasAdminAccess(req, runtimeContext.env)) {
+      return send(res, 401, { code: 40101, message: "请先输入后台访问口令", data: null });
+    }
 
     try {
       const token = getToken(req);
+      const adminPrincipal = requiresAdminAccess(url.pathname) ? getAdminPrincipal(req, runtimeContext.env) : null;
       const body = ["POST", "PUT", "PATCH"].includes(method) ? await readBody(req) : {};
       const route = `${method} ${url.pathname}`;
 
@@ -222,6 +310,26 @@ function createApp(options = {}) {
       if (route === "GET /api/v1/admin/external-samples/template") return ok(res, getExternalSampleTemplate(url.searchParams.get("sourceType") || ""));
       if (route === "POST /api/v1/admin/external-samples/preview") return ok(res, previewExternalSamples(data, body));
       if (route === "POST /api/v1/admin/external-samples/import") return ok(res, withIdempotency(data, req, () => importExternalSamples(data, body)));
+      if (route === "GET /api/v1/admin/imports") return ok(res, listImportBatches(data, Object.fromEntries(url.searchParams)));
+      if (route === "POST /api/v1/admin/imports/preview") return ok(res, withIdempotency(data, req, () => previewImport(data, body)));
+      if (method === "GET" && url.pathname.startsWith("/api/v1/admin/imports/") && url.pathname.endsWith("/failures.csv")) {
+        const batchId = url.pathname.split("/").at(-2);
+        return send(res, 200, exportImportFailuresCsv(data, batchId), {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${batchId}-failures.csv"`,
+        });
+      }
+      if (method === "GET" && url.pathname.startsWith("/api/v1/admin/imports/")) {
+        const batchId = url.pathname.split("/").at(-1);
+        return ok(res, getImportBatch(data, batchId));
+      }
+      if (method === "POST" && url.pathname.startsWith("/api/v1/admin/imports/") && url.pathname.endsWith("/confirm")) {
+        const batchId = url.pathname.split("/").at(-2);
+        return ok(res, withIdempotency(data, req, () => confirmImport(data, batchId, { ...body, operatorId: adminOperatorId(adminPrincipal, body) })));
+      }
+      if (route === "POST /api/v1/admin/corrections/preview") return ok(res, previewCorrection(data, body));
+      if (route === "POST /api/v1/admin/corrections/apply") return ok(res, withIdempotency(data, req, () => applyCorrection(data, { ...body, operatorId: adminOperatorId(adminPrincipal, body) })));
+      if (route === "GET /api/v1/admin/audit-logs") return ok(res, listAuditLogs(data, Object.fromEntries(url.searchParams)));
       if (route === "POST /api/v1/admin/external-status-mappings") return ok(res, withIdempotency(data, req, () => upsertExternalStatusMapping(data, body)));
       if (method === "POST" && url.pathname.startsWith("/api/v1/admin/tasks/") && url.pathname.endsWith("/complete")) {
         const taskId = url.pathname.split("/").at(-2);

@@ -34,9 +34,9 @@ const SAMPLE_TEMPLATES = {
     sourceType: "FULFILLMENT",
     label: SOURCE_LABELS.FULFILLMENT,
     requiredSamples: 3,
-    requiredFields: ["有赞订单号", "物流状态"],
-    recommendedFields: ["快递公司", "运单号", "发货时间", "签收时间", "最新物流节点"],
-    csvHeader: "有赞订单号,快递公司,运单号,物流状态,发货时间,签收时间,最新物流节点",
+    requiredFields: ["订单号", "运输状态"],
+    recommendedFields: ["快递公司", "电子面单号", "获取时间", "收件人姓名", "收件人联系方式"],
+    csvHeader: "快递公司,获取时间,电子面单号,订单号,运输状态,收件人姓名,收件人联系方式",
     notes: [
       "至少复制 3 条真实物流记录，优先覆盖运输中、已签收和异常件。",
       "有赞订单号必须能在订单样本或后台订单中找到。",
@@ -74,14 +74,14 @@ const FIELD_ALIASES = {
   FULFILLMENT: {
     orderId: ["orderId", "order_id"],
     youzanOrderNo: ["youzanOrderNo", "youzan_order_no", "orderNo", "order_no", "订单号", "有赞订单号", "订单编号"],
-    receiverPhone: ["receiverPhone", "receiver_phone", "phone", "手机号", "收货手机号", "收件手机号"],
-    receiverName: ["receiverName", "receiver_name", "receiver", "收货人", "收件人"],
+    receiverPhone: ["receiverPhone", "receiver_phone", "phone", "手机号", "收货手机号", "收件手机号", "收件人联系方式"],
+    receiverName: ["receiverName", "receiver_name", "receiver", "收货人", "收件人", "收件人姓名"],
     carrier: ["carrier", "快递公司", "物流公司", "承运商"],
-    trackingNo: ["trackingNo", "tracking_no", "运单号", "快递单号", "物流单号"],
-    deliveryStatus: ["deliveryStatus", "delivery_status", "物流状态", "配送状态"],
+    trackingNo: ["trackingNo", "tracking_no", "运单号", "快递单号", "物流单号", "电子面单号"],
+    deliveryStatus: ["deliveryStatus", "delivery_status", "物流状态", "配送状态", "运输状态"],
     shippedAt: ["shippedAt", "shipped_at", "发货时间"],
     deliveredAt: ["deliveredAt", "delivered_at", "签收时间", "送达时间"],
-    lastEventText: ["lastEventText", "last_event_text", "最新物流节点", "物流节点", "最新状态"],
+    lastEventText: ["lastEventText", "last_event_text", "最新物流节点", "物流节点", "最新状态", "获取时间"],
   },
   WECHAT_LEAD: {
     userId: ["userId", "user_id", "用户ID"],
@@ -108,7 +108,9 @@ const DELIVERY_STATUS_MAP = new Map([
   ["已支付", "NOT_SHIPPED"],
   ["SHIPPED", "SHIPPED"],
   ["已发货", "SHIPPED"],
+  ["已揽收", "SHIPPED"],
   ["运输中", "SHIPPED"],
+  ["派送中", "SHIPPED"],
   ["配送中", "SHIPPED"],
   ["DELIVERED", "DELIVERED"],
   ["已签收", "DELIVERED"],
@@ -120,9 +122,11 @@ const DELIVERY_STATUS_MAP = new Map([
   ["EXCEPTION", "EXCEPTION"],
   ["异常", "EXCEPTION"],
   ["物流异常", "EXCEPTION"],
+  ["已取消", "CANCELLED"],
+  ["CANCELLED", "CANCELLED"],
 ]);
 
-const VALID_DELIVERY_STATUSES = new Set(["NOT_SHIPPED", "SHIPPED", "DELIVERED", "EXCEPTION"]);
+const VALID_DELIVERY_STATUSES = new Set(["NOT_SHIPPED", "SHIPPED", "DELIVERED", "EXCEPTION", "CANCELLED"]);
 
 const ORDER_STATUS_MAP = new Map([
   ["PAID", "PAID"],
@@ -331,6 +335,7 @@ function previewExternalSamples(data, sourceType, samples) {
       sourceType: type,
       status: errors.length ? "ERROR" : warnings.length ? "WARNING" : "READY",
       importable: errors.length === 0,
+      raw,
       mapped,
       fieldPresence: mappedRow.fieldPresence,
       errors,
