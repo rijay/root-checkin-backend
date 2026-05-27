@@ -123,7 +123,7 @@
               <h2>订单匹配</h2>
               <span class="hint">搜索订单和用户，预览风险后确认写入</span>
             </div>
-            <button class="ghost" id="toggle-bulk-orders" type="button">批量粘贴订单</button>
+            <button class="ghost" id="toggle-bulk-orders" type="button">批量导入订单</button>
           </div>
           <div class="order-searchbar">
             <input id="order-match-search" type="search" placeholder="输入订单号、手机号、收货人或昵称" aria-label="订单匹配搜索" />
@@ -133,8 +133,15 @@
           <div id="match-result" class="match-result"></div>
           <div id="bulk-order-panel" class="bulk-paste-panel" hidden>
             <div class="bulk-paste-copy">
-              <h3>批量粘贴订单</h3>
-              <p>从有赞订单表复制 CSV/表格文本。预览只校验，不写入；确认写入后订单会进入待匹配列表。</p>
+              <h3>批量导入订单</h3>
+              <p>上传有赞导出的 CSV，或直接粘贴 CSV/表格文本。预览只校验，不写入；确认写入后订单会进入待匹配列表。</p>
+            </div>
+            <div class="bulk-file-row">
+              <label class="bulk-file-control" for="bulk-order-file">
+                <span>上传有赞 CSV 文件</span>
+                <input id="bulk-order-file" type="file" accept=".csv,text/csv" aria-label="上传有赞CSV文件" />
+              </label>
+              <div id="bulk-file-status" class="meta">支持有赞导出的原始表头，选择文件后会自动预览。</div>
             </div>
             <textarea id="bulk-order-input" class="bulk-order-input" spellcheck="false" aria-label="批量订单内容"></textarea>
             <div class="bulk-actions">
@@ -143,7 +150,7 @@
               <button id="insert-bulk-order-template" class="ghost" type="button">填入表头</button>
             </div>
             <div id="bulk-order-result" class="bulk-order-result">
-              <div class="meta">可粘贴：有赞订单号、收货人、收货手机号、商品名称、实付金额、订单状态、物流状态、收货地址。</div>
+              <div class="meta">可上传有赞原始 CSV，或粘贴：订单号、收货人、收货手机号、商品名称、实付金额、订单状态、物流状态、收货地址。</div>
             </div>
           </div>
           <div class="order-workbench" id="order-workbench">

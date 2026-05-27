@@ -325,6 +325,40 @@ h1 {
   line-height: 1.5;
 }
 
+.bulk-file-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.bulk-file-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  color: var(--root-green);
+  background: var(--root-paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.bulk-file-control input {
+  max-width: 260px;
+  color: var(--root-clay);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .bulk-order-input {
   min-height: 210px;
 }

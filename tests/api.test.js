@@ -53,6 +53,8 @@ test("serves the REST API and admin dashboard data", async (t) => {
   assert.equal(home.status, 200);
   assert.match(home.contentType, /text\/html/);
   assert.match(home.body, /ROOT 7日打卡后台/);
+  assert.match(home.body, /id="bulk-order-file"/);
+  assert.match(home.body, /上传有赞 CSV 文件/);
 
   const login = await request(baseUrl, "/api/v1/auth/login", {
     method: "POST",

@@ -465,7 +465,36 @@ function toggleBulkOrderPanel() {
 
 function insertBulkOrderTemplate() {
   document.querySelector("#bulk-order-input").value = bulkOrderTemplate();
+  const fileInput = document.querySelector("#bulk-order-file");
+  if (fileInput) fileInput.value = "";
+  setHtml("#bulk-file-status", `<span class="meta">已填入后台模板表头；也可直接上传有赞原始 CSV。</span>`);
   setHtml("#bulk-order-result", `<div class="meta">已填入表头，请从有赞订单表复制真实行后再预览。</div>`);
+}
+
+function readTextFile(file) {
+  if (file && typeof file.text === "function") return file.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result || "");
+    reader.onerror = () => reject(new Error("CSV 文件读取失败，请重新选择文件"));
+    reader.readAsText(file, "utf-8");
+  });
+}
+
+async function loadBulkOrderCsvFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  try {
+    const text = await readTextFile(file);
+    if (!text.trim()) throw new Error("CSV 文件内容为空");
+    document.querySelector("#bulk-order-input").value = text;
+    const rowCount = Math.max(0, text.split(/\r?\n/).filter((line) => line.trim()).length - 1);
+    setHtml("#bulk-file-status", `<span class="meta">已读取 ${escapeHtml(file.name)}，共 ${rowCount} 行订单，正在预览校验。</span>`);
+    await previewBulkOrders();
+  } catch (error) {
+    setHtml("#bulk-file-status", `<span class="sample-error">${escapeHtml(error.message)}</span>`);
+    setHtml("#bulk-order-result", `<div class="sample-error">${escapeHtml(error.message)}</div>`);
+  }
 }
 
 async function previewBulkOrders() {
@@ -1175,6 +1204,7 @@ on("#sync-order", "click", syncManualOrderFromForm);
 on("#confirm-match", "click", confirmSelectedMatch);
 on("#toggle-bulk-orders", "click", toggleBulkOrderPanel);
 on("#insert-bulk-order-template", "click", insertBulkOrderTemplate);
+on("#bulk-order-file", "change", loadBulkOrderCsvFile);
 on("#preview-bulk-orders", "click", previewBulkOrders);
 on("#import-bulk-orders", "click", importBulkOrders);
 on("#task-filter", "change", (event) => {
