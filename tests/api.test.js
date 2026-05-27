@@ -263,6 +263,20 @@ test("admin bulk order paste previews and imports orders into matching queue", a
   assert.equal(preview.data.errorCount, 1);
   assert.equal(imported.data.importedCount, 1);
   assert.ok(dashboard.data.opsDashboard.pendingOrders.some((order) => order.youzanOrderNo === "YZROOT202605250001"));
+
+  const rawYouzanExport = [
+    "订单号,订单状态,全部商品名称,订单实付金额,买家付款时间,收货人/提货人,收货人手机号/提货人手机号,详细收货地址/提货地址",
+    "E20260525220543065306159,已发货,LinkVital益生元饮 7天身体重启计划(1件),99.00,2026-05-25 22:05:57,Alex,13811611060,北京市北京市西城区北京市金泰鑫桥大厦 608",
+  ].join("\n");
+  const rawPreview = await request(baseUrl, "/api/v1/admin/external-samples/preview", {
+    method: "POST",
+    body: JSON.stringify({ sourceType: "YOUZAN_ORDER", text: rawYouzanExport }),
+  });
+  assert.equal(rawPreview.code, 0);
+  assert.equal(rawPreview.data.importableCount, 1);
+  assert.equal(rawPreview.data.rows[0].mapped.youzanOrderNo, "E20260525220543065306159");
+  assert.equal(rawPreview.data.rows[0].mapped.receiverPhone, "13811611060");
+  assert.equal(rawPreview.data.rows[0].mapped.deliveryStatus, "SHIPPED");
 });
 
 test("external platform adapter Interface exposes catalog and manual sample runs", async (t) => {
