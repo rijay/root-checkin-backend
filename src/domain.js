@@ -7,12 +7,15 @@ const adapterCalibration = require("./adapterCalibration");
 const adminOrderMatching = require("./adminOrderMatching");
 const adminOpsPresenter = require("./adminOpsPresenter");
 const adminUserPresenter = require("./adminUserPresenter");
+const auditLog = require("./auditLog");
 const coupon = require("./coupon");
+const csvImport = require("./csvImport");
 const externalAdapterSamples = require("./externalAdapterSamples");
 const externalPlatformAdapters = require("./externalPlatformAdapters");
 const { getHomeViewModel } = require("./flowView");
 const { identifyUser, normalizePhone } = require("./identity");
 const launchReadiness = require("./launchReadiness");
+const manualCorrection = require("./manualCorrection");
 const operationTask = require("./operationTask");
 const orderFulfillment = require("./orderFulfillment");
 const questionnaire = require("./questionnaire");
@@ -31,6 +34,7 @@ const STATES = {
 };
 
 const CLOUDBASE_ACCESS_TOKEN_FILE = "/.tencentcloudbase/wx/cloudbase_access_token";
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const ROUTES_BY_STATE = {
   GUEST: "/pages/home/index",
@@ -168,13 +172,47 @@ function applyUserDisplayProfile(user, body = {}) {
   if (avatarUrl) user.avatar_url = avatarUrl;
 }
 
+function addMsToNowIso(ms) {
+  return nowISO(new Date(Date.now() + ms));
+}
+
+function isExpiredAt(value) {
+  if (!value) return false;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && time <= Date.now();
+}
+
 function issueToken(data, userId) {
   const token = `root_${crypto.randomBytes(18).toString("hex")}`;
+  const now = nowISO();
+  const session = {
+    session_id: createId("ses"),
+    token,
+    user_id: userId,
+    created_at: now,
+    last_seen_at: now,
+    expires_at: addMsToNowIso(SESSION_TTL_MS),
+    revoked_at: "",
+  };
+  ensureList(data, "sessions").push(session);
   data.tokens[token] = userId;
-  return token;
+  return session;
 }
 
 function findUserByToken(data, token) {
+  if (!token) return null;
+  const session = ensureList(data, "sessions").find((item) => item.token === token && !item.revoked_at);
+  if (session) {
+    if (isExpiredAt(session.expires_at)) {
+      session.revoked_at = nowISO();
+      delete data.tokens[token];
+      return null;
+    }
+    session.last_seen_at = nowISO();
+    data.tokens[token] = session.user_id;
+    return data.users.find((user) => user.user_id === session.user_id) || null;
+  }
+
   const userId = data.tokens[token];
   if (!userId) return null;
   return data.users.find((user) => user.user_id === userId) || null;
@@ -420,8 +458,17 @@ function loginByPhone(data, body, phone) {
     applyUserDisplayProfile(user, body);
   }
 
-  const token = issueToken(data, user.user_id);
-  return response({ token, user: publicUser(user), nextRoute: ROUTES_BY_STATE[user.state] });
+  const autoMatch = orderFulfillment.autoMatchOrdersForUser(data, user, { source: "AUTO_WECHAT_PHONE" });
+  const session = issueToken(data, user.user_id);
+  return response({
+    token: session.token,
+    session: {
+      expiresAt: session.expires_at,
+    },
+    autoMatch,
+    user: publicUser(user),
+    nextRoute: ROUTES_BY_STATE[user.state],
+  });
 }
 
 function login(data, body = {}) {
@@ -1248,6 +1295,29 @@ function importExternalSamples(data, body = {}, dateText = todayISO()) {
   return response({ ...result, review });
 }
 
+function previewImport(data, body = {}) {
+  return response(csvImport.previewImport(data, body));
+}
+
+function confirmImport(data, batchId, body = {}, dateText = todayISO()) {
+  return response(csvImport.confirmImport(data, batchId, {
+    dateText,
+    operatorId: body.operatorId || body.operator_id || "",
+  }));
+}
+
+function getImportBatch(data, batchId) {
+  return response(csvImport.getImportBatch(data, batchId));
+}
+
+function listImportBatches(data, query = {}) {
+  return response({ batches: csvImport.listImportBatches(data, query) });
+}
+
+function exportImportFailuresCsv(data, batchId) {
+  return csvImport.exportFailureRowsCsv(data, batchId);
+}
+
 function upsertExternalStatusMapping(data, body = {}) {
   const mapping = externalAdapterSamples.upsertStatusMapping(data, body);
   return response({ success: true, mapping, mappings: externalAdapterSamples.listStatusMappings(data) });
@@ -1311,6 +1381,20 @@ function listOperationTasks(data, query = {}) {
 function completeOperationTask(data, taskId, body = {}) {
   const task = operationTask.completeOperationTask(data, taskId, body);
   return response({ success: true, task: toOperationTaskPayload(data, task) });
+}
+
+function previewCorrection(data, body = {}) {
+  return response(manualCorrection.previewCorrection(data, body));
+}
+
+function applyCorrection(data, body = {}, context = {}, dateText = todayISO()) {
+  return response(manualCorrection.applyCorrection(data, body, {
+    operatorId: body.operatorId || body.operator_id || context.operatorId || "",
+  }, dateText));
+}
+
+function listAuditLogs(data, query = {}) {
+  return response({ auditLogs: auditLog.listAuditLogs(data, query) });
 }
 
 function feedbackTextFromAnswers(answers = {}) {
@@ -1470,11 +1554,16 @@ function resolveManualReview(data, taskId, body = {}, dateText = todayISO()) {
 function toOperationTaskPayload(data, task) {
   const user = data.users.find((item) => item.user_id === task.user_id);
   const order = data.youzanOrders.find((item) => item.order_id === task.order_id);
+  const priority = adminOpsPresenter.buildTaskPriority(task);
   return {
     ...task,
     taskId: task.task_id,
     taskType: task.task_type,
     taskDate: task.task_date,
+    label: priority.label,
+    priorityLevel: priority.level,
+    priorityRank: priority.rank,
+    tone: priority.tone,
     suggestedAction: task.suggested_action || "",
     suggestedScript: task.suggested_script || "",
     user: user ? publicUser(user) : null,
@@ -1496,6 +1585,37 @@ function adminLaunchReadiness(data, context = {}) {
   return response(launchReadiness.buildLaunchReadiness(data, context));
 }
 
+function buildDailyOpsSummary(data, dateText) {
+  const importBatches = csvImport.listImportBatches(data, { date: dateText, limit: 100 });
+  const importedBySource = importBatches.reduce((acc, batch) => {
+    const result = batch.result || {};
+    const key = batch.sourceType || "UNKNOWN";
+    acc[key] = (acc[key] || 0) + (result.importedCount || 0);
+    return acc;
+  }, {});
+  const deliveredToday = data.orderFulfillments.filter((item) => {
+    return item.delivery_status === "DELIVERED" && String(item.delivered_at || item.updated_at || "").startsWith(dateText);
+  }).length;
+  const autoMatchedToday = data.youzanOrders.filter((order) => {
+    return String(order.matched_at || "").startsWith(dateText) && String(order.match_source || "").startsWith("AUTO");
+  }).length;
+  const manualHandledToday = data.auditLogs.filter((log) => String(log.created_at || "").startsWith(dateText)).length;
+  const openConflicts = operationTask.listOpenOperationTasks(data, { taskType: "ORDER_PHONE_MATCH_CONFLICT" }).length;
+  const readyToStart = orderFulfillment.getReadyToStartUsers(data, dateText).length;
+
+  return {
+    date: dateText,
+    importedOrders: importedBySource.YOUZAN_ORDER || 0,
+    importedFulfillments: importedBySource.FULFILLMENT || 0,
+    deliveredToday,
+    autoMatchedToday,
+    manualHandledToday,
+    openConflicts,
+    readyToStart,
+    importBatchCount: importBatches.length,
+  };
+}
+
 function adminDashboard(data, context = {}) {
   const active = data.checkinSessions.filter((item) => item.status === "ACTIVE").length;
   const completed = data.checkinSessions.filter((item) => item.status === "COMPLETED").length;
@@ -1512,6 +1632,7 @@ function adminDashboard(data, context = {}) {
       pendingRefunds,
     },
     summary,
+    dailyOpsSummary: buildDailyOpsSummary(data, summary.date),
     opsDashboard: adminOpsPresenter.buildOpsDashboard(data, summary),
     users: data.users.map(publicUser),
     opsUsers: adminUserPresenter.buildAdminUserRows(data),
@@ -1523,6 +1644,8 @@ function adminDashboard(data, context = {}) {
     couponSummary: coupon.buildCouponSummary(data),
     coupons: data.couponEvents.map((item) => toCouponAdminPayload(data, item)),
     externalSampleReviews: externalAdapterSamples.listExternalSampleReviews(data),
+    importBatches: csvImport.listImportBatches(data, { limit: 10 }),
+    auditLogs: auditLog.listAuditLogs(data, { limit: 10 }),
     externalStatusMappings: externalAdapterSamples.listStatusMappings(data),
     externalAdapterReadiness: externalAdapterSamples.buildAdapterReadiness(data),
     externalSampleTemplates: externalAdapterSamples.listSampleTemplates(),
@@ -1579,6 +1702,7 @@ module.exports = {
   STATES,
   adminLaunchReadiness,
   adminDashboard,
+  applyCorrection,
   applyRefund,
   approveRefund,
   claimCoupon,
@@ -1598,6 +1722,7 @@ module.exports = {
   getQuestionnaireStatus,
   getReadyToStartUsers,
   getExternalSampleTemplate,
+  getImportBatch,
   getExternalAdapters,
   generateOperationTasks,
   getUserOrders,
@@ -1609,12 +1734,18 @@ module.exports = {
   login,
   loginWithWechat,
   listOperationTasks,
+  listImportBatches,
+  listAuditLogs,
+  exportImportFailuresCsv,
   markCouponUsed,
   matchOrder,
   searchAdminOrderMatching,
   publicUser,
   previewAdminOrderMatch,
+  previewCorrection,
+  previewImport,
   confirmAdminOrderMatch,
+  confirmImport,
   previewExternalSamples,
   importExternalSamples,
   upsertExternalStatusMapping,

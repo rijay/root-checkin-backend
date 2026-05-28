@@ -2,6 +2,7 @@ const orderFulfillment = require("./orderFulfillment");
 
 const TASK_PRIORITY = {
   FULFILLMENT_EXCEPTION: { rank: 10, label: "物流异常", level: "高", tone: "danger" },
+  ORDER_PHONE_MATCH_CONFLICT: { rank: 15, label: "手机号匹配冲突", level: "高", tone: "danger" },
   MANUAL_REVIEW_REQUIRED: { rank: 20, label: "需要人工确认", level: "高", tone: "danger" },
   FEEDBACK_FOLLOW: { rank: 30, label: "异常反馈跟进", level: "高", tone: "danger" },
   REFUND_PENDING: { rank: 40, label: "免单待审核", level: "中高", tone: "warning" },

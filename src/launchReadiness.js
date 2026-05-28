@@ -26,13 +26,16 @@ function storeCheck(storeAdapter, target) {
       return makeCheck("store_adapter", "数据仓库 Adapter", "BLOCKER", "JSON 文件 Adapter 只适合内部灰度，正式上线缺少并发、备份、迁移和审计能力。", { kind });
     }
     if (kind === "sqlite") {
-      return makeCheck("store_adapter", "数据仓库 Adapter", "PASS", "SQLite Adapter 已启用，可支撑单实例小范围上线；扩容前再迁移到 PostgreSQL/MySQL。", { kind });
+      return makeCheck("store_adapter", "数据仓库 Adapter", "BLOCKER", "SQLite Adapter 只适合本地验证或极小范围灰度；云托管正式环境重启、扩容或迁移时可能丢失 /tmp 数据，0.4.0 正式上线必须切换 MySQL Adapter。", { kind });
     }
-    return makeCheck("store_adapter", "数据仓库 Adapter", "PASS", "已使用生产级持久化 Adapter。", { kind });
+    if (kind === "mysql") {
+      return makeCheck("store_adapter", "数据仓库 Adapter", "PASS", "已启用 MySQL 持久化 Adapter，可支撑云托管正式环境重启后的用户、订单和运营状态保留。", { kind });
+    }
+    return makeCheck("store_adapter", "数据仓库 Adapter", "BLOCKER", "0.4.0 正式上线要求使用 MySQL Adapter，并完成备份与回滚验证。", { kind });
   }
 
   if (kind === "memory") {
-    return makeCheck("store_adapter", "数据仓库 Adapter", "WARNING", "当前为内存 Adapter，只适合演示；运营试跑建议设置 ROOT_STORE_FILE。", { kind });
+    return makeCheck("store_adapter", "数据仓库 Adapter", "WARNING", "当前为内存 Adapter，只适合演示；运营试跑建议设置 ROOT_STORE_FILE 或 ROOT_STORE_ADAPTER=mysql。", { kind });
   }
   return makeCheck("store_adapter", "数据仓库 Adapter", "PASS", "当前 Adapter 可支撑内部灰度试跑。", { kind });
 }
@@ -65,6 +68,20 @@ function domainCheck(env, target) {
     return makeCheck("public_base_url", "正式域名", "BLOCKER", "正式域名必须是可访问的 HTTPS 合法域名，且不能保留 example.com 占位。", { publicBaseUrl });
   }
   return makeCheck("public_base_url", "正式域名", "PASS", "已配置 HTTPS 正式域名。", { publicBaseUrl });
+}
+
+function adminAccessCheck(env, target) {
+  const configured = Boolean(getEnv(env, ["ROOT_ADMIN_TOKEN", "ROOT_ADMIN_TOKENS"]));
+  if (configured) {
+    return makeCheck("admin_access", "后台访问口令", "PASS", "已配置后台访问口令，运营数据 Interface 会拒绝未授权请求。", { configured });
+  }
+  return makeCheck(
+    "admin_access",
+    "后台访问口令",
+    target === "production" ? "BLOCKER" : "WARNING",
+    "未配置 ROOT_ADMIN_TOKEN 或 ROOT_ADMIN_TOKENS；正式环境后台运营数据不能裸露访问。",
+    { configured }
+  );
 }
 
 function sampleReadinessCheck(sourceReadiness, target) {
@@ -120,6 +137,7 @@ function buildLaunchReadiness(data, options = {}) {
     storeCheck(options.storeAdapter, target),
     wechatCheck(env, target),
     domainCheck(env, target),
+    adminAccessCheck(env, target),
     ...adapterReadiness.sources.map((source) => sampleReadinessCheck(source, target)),
   ];
   const summary = summarize(checks);
